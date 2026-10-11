@@ -10,7 +10,7 @@ BACKUP="${DROVER_BACKUP_LEAD:-lead-backup}"; LIMIT="${DROVER_TAKEOVER_SEC:-2700}
 RUNBOOK="${DROVER_RUNBOOK:-$DROVER_SRC/docs/RUNBOOK.md}"
 mkdir -p "$FLEET_STATE"
 while true; do
-  now=$(date +%s); hb=$(stat -f %m "$HB" 2>/dev/null || echo 0); age=$((now-hb))
+  now=$(date +%s); hb=$(drover_mtime "$HB" 2>/dev/null || echo 0); age=$((now-hb))
   if [ "$hb" -eq 0 ]; then
     :   # no heartbeat file yet: no primary lead has started, so there is nothing to take over
   elif [ "$age" -gt "$LIMIT" ] && [ ! -f "$FLAG" ]; then

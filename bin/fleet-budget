@@ -137,7 +137,7 @@ retry_progress(){
  case "$n" in ''|*[!0-9]*) return 2;; esac
  [ "$n" -eq 0 ] || return 2
  if [ -n "${rp:-}" ] && [ -f "$rp" ]; then
-  m=$(stat -f %m "$rp" 2>/dev/null) || return 2
+  m=$(drover_mtime "$rp" 2>/dev/null) || return 2
   case "$m" in ''|*[!0-9]*) return 2;; esac
   [ "$m" -lt "$t" ] || return 2
  fi
@@ -172,7 +172,7 @@ while read -r a kind st; do
     banner_line=$(printf '%s\n' "$pane" | grep -niE 'usage limit|rate limit|session limit|hit your session' | tail -1 | cut -d: -f1)
     after=$(printf '%s\n' "$pane" | tail -n +$((banner_line+1)) | grep -cE '^[[:space:]]*(•|✓|└|│)') || true
     ta=$(printf '%s' "$pane" | tr '\n' ' ' | tr -s ' ' | grep -oE 'try again at [A-Z][a-z]{2} [0-9]{1,2}(st|nd|rd|th), [0-9]{4} [0-9]{1,2}:[0-9]{2} [AP]M' | tail -1 | sed -E 's/^try again at //; s/([0-9])(st|nd|rd|th),/\1,/') || true
-    ts="";if [ -n "$ta" ];then ts=$(date -j -f '%b %d, %Y %I:%M %p' "$ta" +%s 2>/dev/null) || true;fi
+    ts="";if [ -n "$ta" ];then ts=$(drover_date_parse '%b %d, %Y %I:%M %p' "$ta" 2>/dev/null) || true;fi
     if [ -n "$ts" ] && [ "$ts" -le "$(date +%s)" ];then after=1;fi
     if [ "${after:-0}" -eq 0 ];then verdict=USAGE_CAP;cx_broke=$((cx_broke+1));fi
    fi
@@ -187,7 +187,7 @@ while read -r a kind st; do
     line=$(printf '%s\n' "$pane" | grep -iE 'session limit|hit your session' | tail -1) || true
     r=$(printf '%s' "$line" | grep -oE 'resets [0-9]{1,2}(:[0-9]{2})?[ap]m' | awk '{print $2}') || true
     if [ -n "$r" ];then
-     rs=$(date -j -f '%I:%M%p' "$(printf '%s' "$r" | sed -E 's/^([0-9]{1,2})([ap]m)$/\1:00\2/' | tr a-z A-Z)" +%s 2>/dev/null) || rs=0
+     rs=$(drover_date_parse '%I:%M%p' "$(printf '%s' "$r" | sed -E 's/^([0-9]{1,2})([ap]m)$/\1:00\2/' | tr a-z A-Z)" 2>/dev/null) || rs=0
      if [ "$rs" -gt "$(date +%s)" ];then verdict=SESSION_CAP;cl_broke=$((cl_broke+1));fi
     fi
    fi

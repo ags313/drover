@@ -24,7 +24,7 @@ mkdir -p "$STATE/alerts"
 
 send() {  # key title body
   local key=$1 title=$2 body=$3 stamp="$STATE/alerts/$1" now; now=$(date +%s)
-  if [ -f "$stamp" ] && [ $(( now - $(stat -f %m "$stamp") )) -lt "$EVERY" ]; then return 0; fi
+  if [ -f "$stamp" ] && [ $(( now - $(drover_mtime "$stamp") )) -lt "$EVERY" ]; then return 0; fi
   touch "$stamp"
   if [ "$DRY" = 1 ]; then echo "ALERT[$key] $title — $body"; return 0; fi
   herdr notification show "$title" --body "$body" --sound request >/dev/null 2>&1
@@ -36,7 +36,7 @@ send() {  # key title body
 case "${1:-}" in
   check)
     if [ -f "$STATE/land-paused" ]; then
-      age=$(( ( $(date +%s) - $(stat -f %m "$STATE/land-paused") ) / 60 ))
+      age=$(( ( $(date +%s) - $(drover_mtime "$STATE/land-paused") ) / 60 ))
       send land-paused "Landing PAUSED (${age}m)" \
         "$(head -c 240 "$STATE/land-paused" | tr '\n' ' ') — nothing lands or pushes until the lead clears state/land-paused"
     elif [ -f "$STATE/alerts/land-paused" ]; then
@@ -50,7 +50,7 @@ case "${1:-}" in
     # above only fires from INSIDE a completed tick). state/last is rewritten at the end of every tick.
     last="$STATE/last"; lim=${FLEET_TICK_STALE:-2700}
     if [ -f "$last" ]; then
-      age=$(( $(date +%s) - $(stat -f %m "$last") ))
+      age=$(( $(date +%s) - $(drover_mtime "$last") ))
       if [ "$age" -gt "$lim" ]; then
         send tick-stalled "Watcher tick STALLED ($((age/60))m)" \
           "no tick has completed for $((age/60)) min — dispatch/landing/push are frozen; check the fleet-watch process tree for a hung step"

@@ -175,8 +175,8 @@ spend_guard(){
   if [ -n "$from" ] && [[ "$(date +%F)" < "$from" ]]; then
     [ -f "$STATE/spend-capped" ] && { rm -f "$STATE/spend-capped"; log "SPEND CAP off until $from"; }
     return 0; fi
-  if [ ! -f "$cache" ] || [ $(( now - $(stat -f %m "$cache") )) -ge 300 ] || [ "$(date -r "$(stat -f %m "$cache")" +%F)" != "$(date +%F)" ]; then
-    local usd mid; mid=$(( $(date -j -f '%Y-%m-%d %H:%M:%S' "$(date +%F) 00:00:00" +%s) * 1000 ))
+  if [ ! -f "$cache" ] || [ $(( now - $(drover_mtime "$cache") )) -ge 300 ] || [ "$(date -r "$cache" +%F)" != "$(date +%F)" ]; then
+    local usd mid; mid=$(( $(drover_date_parse '%Y-%m-%d %H:%M:%S' "$(date +%F) 00:00:00") * 1000 ))
     # Walk session -> message through the session index (CROSS JOIN pins the join order; only sessions updated
     # today are visited) instead of letting the planner walk every message ever written. Bounded twice:
     # sqlite's busy timeout and a 20s alarm, so a locked or slow db costs one stale cached figure, never a
@@ -195,7 +195,7 @@ spend_guard(){
 # --- disk: agents' scratch copies and reviewers' worktrees are never cleaned up by their creators ------
 # (2026-09-18: 51 GB of stale review worktrees, the disk at 91%). fleet-sweep removes only stale, clean, unused copies.
 sweep_guard(){ local st="$STATE/sweep.stamp"
-  [ -f "$st" ] && [ $(( $(date +%s) - $(stat -f %m "$st") )) -lt 21600 ] && return 0
+  [ -f "$st" ] && [ $(( $(date +%s) - $(drover_mtime "$st") )) -lt 21600 ] && return 0
   : > "$st"; local out; out=$("$DROVER_BIN"/fleet-sweep 2>/dev/null | tail -1); [ -n "$out" ] && log "SWEEP ${out}"; }
 
 # --- guardrail: one bean, one coder -------------------------------------------------------------
@@ -207,7 +207,7 @@ sweep_guard(){ local st="$STATE/sweep.stamp"
 owner_blocks(){ local bean="$1" seat="$2" own f="$STATE/owner/$1"
   [ -f "$f" ] || return 1
   own=$(cat "$f"); [ -z "$own" ] || [ "$own" = "$seat" ] && return 1
-  if [ $(( $(date +%s) - $(stat -f %m "$f") )) -ge 259200 ]; then log "OWNER EXPIRED: $bean was $own's (72h untouched) -> $seat"; return 1; fi
+  if [ $(( $(date +%s) - $(drover_mtime "$f") )) -ge 259200 ]; then log "OWNER EXPIRED: $bean was $own's (72h untouched) -> $seat"; return 1; fi
   if [ -f "$STATE/credit-dead/$own" ] || ! "$DROVER_BIN"/fleet status 2>/dev/null | awk -v o="$own" '$1==o && $3!="MISSING"{f=1} END{exit !f}'; then
     log "OWNER HANDOVER: $bean from $own (missing or out of credits) -> $seat"; return 1; fi
   return 0; }
@@ -227,7 +227,7 @@ owner_sync(){ mkdir -p "$STATE/owner" "$STATE/double"; local f s b seen=""
   # dispatch until released by hand).
   local lof loage
   for lof in "$STATE"/lead-owned/*; do [ -f "$lof" ] || continue
-    loage=$(( ($(date +%s) - $(stat -f %m "$lof" 2>/dev/null || echo 0)) / 3600 ))
+    loage=$(( ($(date +%s) - $(drover_mtime "$lof" 2>/dev/null || echo 0)) / 3600 ))
     [ "$loage" -ge 24 ] && { rm -f "$lof"; log "LEAD-OWNED TTL: released $(basename "$lof") (${loage}h old, orphaned)"; }
   done
   # Auto-release STALE owner markers — owner seat NOT working, marker >30min old — so the bean can
@@ -237,7 +237,7 @@ owner_sync(){ mkdir -p "$STATE/owner" "$STATE/double"; local f s b seen=""
   local of ob oo obr on oag chk=0
   for of in "$STATE"/owner/*; do
     [ -f "$of" ] || continue; [ "$chk" -ge 12 ] && break
-    oag=$(( ($(date +%s) - $(stat -f %m "$of" 2>/dev/null || echo 0)) / 60 )); [ "$oag" -lt 30 ] && continue
+    oag=$(( ($(date +%s) - $(drover_mtime "$of" 2>/dev/null || echo 0)) / 60 )); [ "$oag" -lt 30 ] && continue
     ob=$(basename "$of"); oo=$(cat "$of" 2>/dev/null | tr -d '[:space:]'); [ -n "$oo" ] || continue
     case "$wk" in *" $oo "*) continue;; esac   # owner is mid-task — never yank an active bean
     { [ -f "$STATE/approved/$ob" ] || [ -f "$STATE/reviews/$ob" ]; } && continue
@@ -309,7 +309,7 @@ review_verdict(){ local st="$1" sum="$2" rep="$3" v p
 # task stranded -> mark credit-dead and hand the bean back. Dialogs and unsent prompts are flagged for the
 # human once per episode and NEVER answered here.
 seat_scan(){ local st="$STATE/seat-scan.stamp" now f s r cls conf ts bean rest rep coder
-  now=$(date +%s); [ -f "$st" ] && [ $(( now - $(stat -f %m "$st") )) -lt 600 ] && return 0; : > "$st"
+  now=$(date +%s); [ -f "$st" ] && [ $(( now - $(drover_mtime "$st") )) -lt 600 ] && return 0; : > "$st"
   mkdir -p "$STATE/seat-flag" "$STATE/credit-dead" "$STATE/reviews"
   for f in "$TASKS"/*; do [ -f "$f" ] || continue; s=$(basename "$f")
     IFS=$'\t' read -r ts bean rest rep < "$f"; [ -n "$bean" ] || continue
@@ -453,7 +453,7 @@ yolo_guard(){
 # the ones no fleet state names to todo. Throttled to every 10 min.
 ghost_reap(){
   local st="$STATE/.ghost-reap.stamp" r
-  [ -f "$st" ] && [ $(( $(date +%s) - $(stat -f %m "$st") )) -lt 600 ] && return 0
+  [ -f "$st" ] && [ $(( $(date +%s) - $(drover_mtime "$st") )) -lt 600 ] && return 0
   touch "$st"; r=$("$DROVER_BIN"/fleet-ghost-reap 2>&1 | grep '^reset'); [ -n "$r" ] && log "GHOST-REAP $r"
 }
 
@@ -546,7 +546,7 @@ auto_announce(){
     printf '%s\n' "$st" | awk -v n="$a" '$1==n && ($3=="done" || $3=="idle"){f=1} END{exit !f}' || continue
     rep=$(ls -t "$REPORTS/$a-$b"*.md 2>/dev/null | grep -v -- '-review-' | head -1); [ -n "$rep" ] || continue
     [ "$rep" -nt "$t" ] || continue
-    [ $(( $(date +%s) - $(stat -f %m "$rep") )) -ge 300 ] || continue
+    [ $(( $(date +%s) - $(drover_mtime "$rep") )) -ge 300 ] || continue
     v=$(grep -oE '^(DONE|BLOCKED|PARTIAL|CHANGES)\b' "$rep" | tail -1); v=${v:-DONE}
     "$DROVER_BIN"/fleet-done "$a" "$b" "$v" "auto-announced by watcher: seat idle with a newer report (never ran fleet-done)" "$rep" >/dev/null 2>&1 \
       && log "AUTO-ANNOUNCE $a $b $v (idle, report $(basename "$rep") newer than task)"
@@ -564,7 +564,7 @@ refill(){
     # rejoins on its own instead of needing me to remember it.
     mkdir -p "$STATE/credit-dead"
     if [ -f "$STATE/credit-dead/$a" ]; then
-      cd_age=$(( ( $(date +%s) - $(stat -f %m "$STATE/credit-dead/$a" 2>/dev/null || echo 0) ) / 60 ))
+      cd_age=$(( ( $(date +%s) - $(drover_mtime "$STATE/credit-dead/$a" 2>/dev/null || echo 0) ) / 60 ))
       [ "${cd_age:-0}" -lt 30 ] && continue
       rm -f "$STATE/credit-dead/$a"   # past the TTL: fall through and re-check the pane
     fi
@@ -661,7 +661,7 @@ snapshot_wip(){
   # (unstaged edits never reach the object DB, so fsck/stash/reflog all correctly find nothing).
   # Throttled to every 20 minutes: it copies only dirty TRACKED files, ~48MB per pass.
   local m="$STATE/last-snapshot" age=999
-  [ -f "$m" ] && age=$(( ( $(date +%s) - $(stat -f %m "$m" 2>/dev/null || echo 0) ) / 60 ))
+  [ -f "$m" ] && age=$(( ( $(date +%s) - $(drover_mtime "$m" 2>/dev/null || echo 0) ) / 60 ))
   [ "$age" -lt 20 ] && return 0
   : > "$m"
   local out; out=$("$DROVER_BIN"/fleet-snapshot 2>/dev/null | tail -1)
@@ -714,14 +714,14 @@ inventory_alert(){
   # commits), throttled 30m — the signal to run fleet-push. Also warns hourly on integrity drift (beans
   # marked completed on main whose code isn't landed). Read-only.
   local m="$STATE/last-invcheck" age=999
-  [ -f "$m" ] && age=$(( ( $(date +%s) - $(stat -f %m "$m" 2>/dev/null || echo 0) ) / 60 ))
+  [ -f "$m" ] && age=$(( ( $(date +%s) - $(drover_mtime "$m" 2>/dev/null || echo 0) ) / 60 ))
   [ "$age" -lt 30 ] && return 0
   : > "$m"
   local ahead cap; ahead=$(cd "$REPO" && git rev-list --count origin/main..HEAD 2>/dev/null || echo 0)
   cap=$(cat "$STATE/inventory-warn" 2>/dev/null); cap="${cap:-15}"
   [ "${ahead:-0}" -ge "$cap" ] && log "INVENTORY WARN: local main $ahead commit(s) ahead of origin (undeployed) >= $cap — verify+push via fleet-push"
   local cm="$STATE/last-completed-audit" cage=999
-  [ -f "$cm" ] && cage=$(( ( $(date +%s) - $(stat -f %m "$cm" 2>/dev/null || echo 0) ) / 60 ))
+  [ -f "$cm" ] && cage=$(( ( $(date +%s) - $(drover_mtime "$cm" 2>/dev/null || echo 0) ) / 60 ))
   if [ "$cage" -ge 60 ]; then
     : > "$cm"
     local fc; fc=$(capped 120 "$DROVER_BIN"/fleet-completed-audit --count 2>/dev/null || echo 0)
@@ -761,7 +761,7 @@ auto_land(){
   # and thrash the box. Newest approved first.
   local LK="$STATE/.land-lock"
   if ! mkdir "$LK" 2>/dev/null; then
-    local age=$(( $(date +%s) - $(stat -f %m "$LK" 2>/dev/null || echo 0) ))
+    local age=$(( $(date +%s) - $(drover_mtime "$LK" 2>/dev/null || echo 0) ))
     [ "$age" -gt 1500 ] && { rmdir "$LK" 2>/dev/null; mkdir "$LK" 2>/dev/null || return 0; } || return 0
   fi
   local b bean=""
@@ -786,7 +786,7 @@ route_land_conflicts(){
   for f in "$STATE"/needs-land/*; do
     [ -f "$f" ] || continue; b="${f##*/}"; reason=$(LC_ALL=C tr -cd '\40-\176' < "$f")
     case "$reason" in *"content conflict in"*|*"related tests failed"*) ;; *) continue ;; esac
-    [ $(( $(date +%s) - $(stat -f %m "$f") )) -ge 120 ] || continue      # let a racing re-land settle first
+    [ $(( $(date +%s) - $(drover_mtime "$f") )) -ge 120 ] || continue      # let a racing re-land settle first
     owner=$(head -1 "$STATE/owner/$b" 2>/dev/null); seat=""
     if [ -n "$owner" ] && printf '%s\n' "$live" | grep -qx -- "$owner" && ! printf '%s' " $BROKE " | grep -q " $(kind_of "$owner") "; then seat=$owner
     else best=999; for n in $live; do printf '%s' " $BROKE " | grep -q " $(kind_of "$n") " && continue
@@ -834,7 +834,7 @@ auto_push(){
     # second, concurrent push. Check the owner's pid first; age is only the backstop for a lock
     # nobody is holding (crash before the pid file was even written).
     local owner; owner=$(cat "$PK/pid" 2>/dev/null)
-    local age=$(( $(date +%s) - $(stat -f %m "$PK" 2>/dev/null || echo 0) ))
+    local age=$(( $(date +%s) - $(drover_mtime "$PK" 2>/dev/null || echo 0) ))
     if { [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; } || { [ -z "$owner" ] && [ "$age" -gt 1800 ]; }; then
       rm -rf "$PK"; mkdir "$PK" 2>/dev/null || return 0; log "AUTO-PUSH: took over stale push lock (owner ${owner:-unknown} gone, age ${age}s)"
     else return 0; fi

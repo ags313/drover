@@ -41,3 +41,23 @@ if [ -z "${DROVER_BEAN_PREFIX:-}" ] && [ -f "${DROVER_REPO:-/nonexistent}/.beans
 fi
 DROVER_BEAN_PREFIX="${DROVER_BEAN_PREFIX:-bean-}"
 DROVER_BEAN_RE="${DROVER_BEAN_RE:-${DROVER_BEAN_PREFIX}[a-z0-9]{4}}"
+
+# stat and date take different flags in GNU coreutils (Linux, NixOS, or a Mac with coreutils first on PATH)
+# and BSD (stock macOS). Probe the binaries, not the OS. On GNU `stat -f %m` is a filesystem query: it prints
+# nothing usable and every age computed from it became $(( now - )), a syntax error.
+#   drover_mtime FILE...          modification time, epoch seconds
+#   drover_size FILE              size in bytes
+#   drover_date_parse FMT STR     STR (laid out as strftime FMT) -> epoch seconds; fields STR lacks come from now.
+#                                 GNU date ignores FMT and parses STR on its own; every FMT drover uses is one it reads.
+if stat -c %Y / >/dev/null 2>&1; then
+  drover_mtime(){ stat -c %Y "$@"; }
+  drover_size(){ stat -c %s "$@"; }
+else
+  drover_mtime(){ stat -f %m "$@"; }
+  drover_size(){ stat -f %z "$@"; }
+fi
+if date -d @0 >/dev/null 2>&1; then
+  drover_date_parse(){ date -d "$2" +%s; }
+else
+  drover_date_parse(){ date -j -f "$1" "$2" +%s; }
+fi

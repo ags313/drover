@@ -20,7 +20,7 @@ while read -r sp; do
   while read -r d; do
     sz=$(du -sm "$d" 2>/dev/null | cut -f1) || continue
     [ "${sz:-0}" -ge 50 ] || continue
-    m=$(stat -f '%m' "$d" 2>/dev/null) || continue
+    m=$(drover_mtime "$d" 2>/dev/null) || continue
     age=$(( (now - m) / 60 ))
     [ "$age" -ge "$MIN_AGE" ] || continue
     if [ "$DRY" = 1 ]; then echo "would remove ${sz}MB ${age}m $d"
@@ -36,7 +36,7 @@ ROOT="${FLEET_ROOT:-${DROVER_REPO:?set DROVER_REPO (env or ~/.config/drover/conf
 SCRATCH_WT="${DROVER_SCRATCH_WORKTREES:-$DROVER_HOME/scratch}"
 while read -r wt; do
   [ -d "$wt" ] || continue
-  age=$(( (now - $(stat -f %m "$wt")) / 60 )); [ "$age" -ge "${WT_MIN_AGE:-720}" ] || continue
+  age=$(( (now - $(drover_mtime "$wt")) / 60 )); [ "$age" -ge "${WT_MIN_AGE:-720}" ] || continue
   [ -z "$(git -C "$wt" status --porcelain 2>/dev/null | head -1)" ] || continue
   [ -z "$(git -C "$wt" log --oneline -1 HEAD --not --branches --remotes 2>/dev/null)" ] || continue
   [ -z "$(lsof +d "$wt" 2>/dev/null | awk 'NR>1' | head -1)" ] || continue

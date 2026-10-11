@@ -77,7 +77,7 @@ trap 'rm -f "$tmp"' EXIT
     echo "- latest retro: none"
     echo "- status: OVERDUE — run and fill a formal retro now"
   else
-    retro_epoch=$(stat -f '%m' "$latest_retro")
+    retro_epoch=$(drover_mtime "$latest_retro")
     retro_age_minutes=$(( ($(date '+%s') - retro_epoch) / 60 ))
     printf -- '- latest retro: `%s`\n' "$latest_retro"
     printf -- '- age: `%s` minutes\n' "$retro_age_minutes"

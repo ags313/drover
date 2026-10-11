@@ -68,7 +68,7 @@ reap)
     # ...but a bean filed on a branch is not on main YET: a claim under 24h old on a missing bean is live work,
     # not stale. Releasing those dropped ~300 claims mid-change from one seat whose bean was still branch-only.
     if [ "$st" = missing ] && [ -n "${ts:-}" ]; then
-      age=$(( $(date -u +%s) - $(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null || echo 0) ))
+      age=$(( $(date -u +%s) - $(TZ=UTC drover_date_parse '%Y-%m-%dT%H:%M:%SZ' "$ts" 2>/dev/null || echo 0) ))
       [ "$age" -lt 86400 ] && st=young-branch-bean
     fi
     # A PARKED bean (noop-held) that no seat's task file names guards nothing: nobody is editing it.

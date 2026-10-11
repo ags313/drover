@@ -117,7 +117,7 @@ case "${1:-check}" in
       fi
       lastc=$("$GIT" -C "$REPO" log -1 --format=%ct "$br" 2>/dev/null || echo "$now"); idle=$(( (now - lastc) / 60 ))
       if [ -f "$rp" ]; then
-        rmin=$(( (now - $(stat -f %m "$rp" 2>/dev/null || echo "$now")) / 60 ))
+        rmin=$(( (now - $(drover_mtime "$rp" 2>/dev/null || echo "$now")) / 60 ))
         report="yes (${rmin}m ago)"
       else report="none"; fi
       flag=""; case "$commits" in none|beans-only) [ "$age" -ge 15 ] && [ "$report" = "none" ] && flag="  !! no code, no report";; esac

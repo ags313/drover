@@ -59,7 +59,7 @@ grep -q 's-bean-y-review' <<<"$out" && bad 'review-check flagged a grounded revi
 grep -q 'self-serve' <<<"$out" && bad 'review-check flagged a reviewer seat report' || ok 'review-check quiet on a seat report named *-reviewer-*'
 
 # --- fleet-claim reap: young-branch-bean ---------------------------------------------------------------------
-now=$(date -u +%FT%TZ); old=$(date -u -v-2d +%FT%TZ)
+now=$(date -u +%FT%TZ); old=$(date -u -d '2 days ago' +%FT%TZ 2>/dev/null || date -u -v-2d +%FT%TZ)
 printf 'c1\tbean-new1\tsrc/young.txt\t%s\nc2\tbean-gone\tsrc/old.txt\t%s\n' "$now" "$old" > "$DROVER_HOME/claims.tsv"
 out=$("$BIN"/fleet-claim reap)
 grep -q 'released src/old.txt' <<<"$out" && ok 'claim reap releases an old claim on a missing bean' || bad 'claim reap kept an old missing-bean claim'
