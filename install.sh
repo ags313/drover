@@ -99,14 +99,14 @@ for f in "$SRC"/examples/briefs/*; do
 done
 
 # render TEMPLATE DEST: fill @BIN@, @LOGS@ and @PATH@; write DEST only when it changed. Exit 0 = written.
+# The PATH every unit runs with. Units outlive the shell: drop /nix/store entries (a nix-shell or direnv PATH),
+# which garbage collection deletes; the profile dirs (/run/current-system/sw/bin, ~/.nix-profile/bin, ...) stay.
+UNIT_PATH=$(IFS=:; for d in $PATH; do case $d in /nix/store/*|'') ;; *) printf '%s:' "$d" ;; esac; done)
+UNIT_PATH=${UNIT_PATH%:}
 render(){
   local tmp rc=1; tmp=$(mktemp)
-  # Units outlive the shell: drop /nix/store entries (a nix-shell or direnv PATH), which garbage collection
-  # deletes; the profile dirs (/run/current-system/sw/bin, ~/.nix-profile/bin, ...) stay valid.
-  local path d; path=$(IFS=:; for d in $PATH; do case $d in /nix/store/*|'') ;; *) printf '%s:' "$d" ;; esac; done)
-  path=${path%:}
   # systemd expands %-specifiers inside unit files, so a literal % in PATH is written %%.
-  [ "$DROVER_SERVICES" = systemd ] && path=${path//%/%%}
+  local path=$UNIT_PATH; [ "$DROVER_SERVICES" = systemd ] && path=${path//%/%%}
   sed -e "s|@BIN@|$(sed_esc "$BIN_DIR")|g" -e "s|@LOGS@|$(sed_esc "$HOME_DIR/logs")|g" \
       -e "s|@PATH@|$(sed_esc "$path")|g" "$1" > "$tmp"
   if [ -f "$2" ] && cmp -s "$tmp" "$2"; then :
@@ -135,6 +135,11 @@ systemd)
     render "$t" "$SD/$(basename "$t" .in)" && changed=1
   done
   [ "$changed" = 1 ] && run systemctl --user daemon-reload
+  # A tool found only through nix-shell is not on UNIT_PATH: the watcher would run without it (no sqlite3: no
+  # spend cap; no lsof: no worktree sweep). shell.nix lists them all; install them in your profile.
+  missing=$(for t in git jq python3 perl sqlite3 lsof herdr beans systemd-run; do
+    PATH=$UNIT_PATH command -v "$t" >/dev/null || printf ' %s' "$t"; done)
+  [ -z "$missing" ] || say "WARN: not on the units' PATH:$missing — install them in your user or system profile (see shell.nix)"
   if [ "$LOAD" = 1 ]; then
     for job in $(jobs); do
       case $job in *lead-watchdog) [ "$WATCHDOG" = 1 ] || continue ;; esac
