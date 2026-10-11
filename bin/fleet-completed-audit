@@ -21,11 +21,11 @@ CODE_RE="${DROVER_CODE_PATHS:-}"
 if [ "${1:-}" = --count ]; then sed -n '1p' "$CACHE" 2>/dev/null; exit 0; fi
 cd "$REPO" || exit 1
 out=$(mktemp)
-git ls-tree -r --name-only origin/main -- .beans 2>/dev/null | while read -r bf; do
+git ls-tree -r --name-only ${DROVER_UPSTREAM} -- .beans 2>/dev/null | while read -r bf; do
   bean=$(printf '%s' "$bf" | grep -oE "$DROVER_BEAN_RE" | head -1); [ -n "$bean" ] || continue
-  [ "$(git show "origin/main:$bf" 2>/dev/null | sed -n 's/^status: //p' | head -1)" = completed ] || continue
+  [ "$(git show "${DROVER_UPSTREAM}:$bf" 2>/dev/null | sed -n 's/^status: //p' | head -1)" = completed ] || continue
   for b in $(git for-each-ref --format='%(refname:short)' "refs/heads/fleet/*-$bean" 2>/dev/null); do
-    hit=$(git cherry origin/main "$b" 2>/dev/null | awk '/^\+/{print $2}' | while read -r c; do
+    hit=$(git cherry ${DROVER_UPSTREAM} "$b" 2>/dev/null | awk '/^\+/{print $2}' | while read -r c; do
       files=$(git show --name-only --format= "$c" 2>/dev/null)
       if [ -n "$CODE_RE" ]; then
         printf '%s\n' "$files" | grep -qE "$CODE_RE" && { echo x; break; }
@@ -39,6 +39,6 @@ git ls-tree -r --name-only origin/main -- .beans 2>/dev/null | while read -r bf;
 done | sort -u > "$out"
 n=$(grep -c . "$out")
 { echo "$n"; date -u +%FT%TZ; cat "$out"; } > "$CACHE"
-echo "falsely-completed (completed on main, code not landed): $n"
+echo "falsely-completed (completed on ${DROVER_MAIN_BRANCH}, code not landed): $n"
 cat "$out"
 rm -f "$out"

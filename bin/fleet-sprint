@@ -55,7 +55,7 @@ close)
   theme=$(awk -F'\t' '$1=="sprint"{print $4}' "$SPRINT")
   echo "closing sprint $id: $theme"
   awk -F'\t' '$1=="bean"{print $3}' "$SPRINT" | while read -r b; do
-    landed=$(git -C "$REPO" log --oneline origin/main --grep "$b" | head -1)
+    landed=$(git -C "$REPO" log --oneline ${DROVER_UPSTREAM} --grep "$b" | head -1)
     printf '  %-12s %s\n' "$b" "${landed:-NOT LANDED}"
   done
   printf 'closed\t%s\t%s\t%s\n' "$id" "$(date -u +%FT%TZ)" "${2:-}" >> "$SPRINT"

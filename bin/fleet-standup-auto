@@ -95,9 +95,9 @@ trap 'rm -f "$tmp"' EXIT
   if git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
     head=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo unavailable)
     branch=$(git -C "$REPO_DIR" branch --show-current 2>/dev/null || echo detached)
-    ahead=$(git -C "$REPO_DIR" rev-list --count origin/main..HEAD 2>/dev/null || echo unavailable)
+    ahead=$(git -C "$REPO_DIR" rev-list --count ${DROVER_UPSTREAM}..HEAD 2>/dev/null || echo unavailable)
     dirty=$(git -C "$REPO_DIR" status --short 2>/dev/null | wc -l | tr -d ' ')
-    printf -- '- branch: `%s`\n- head: `%s`\n- commits ahead of origin/main: `%s`\n- working-tree status entries: `%s`\n' "$branch" "$head" "$ahead" "$dirty"
+    printf -- '- branch: `%s`\n- head: `%s`\n- commits ahead of %s: `%s`\n- working-tree status entries: `%s`\n' "$branch" "$head" "$DROVER_UPSTREAM" "$ahead" "$dirty"
   else
     echo "- integration repository unavailable"
   fi

@@ -16,10 +16,10 @@ flagged=$(grep -c "^${today}T.*	FLAGGED	" "$LEDGER"); flagged=${flagged:-0}
 pushes=$(grep -c "^${today}T.*	PUSHED	" "$LEDGER"); pushes=${pushes:-0}
 deployed=$(awk -F'\t' -v d="$today" '$1 ~ ("^" d "T") && $2=="PUSHED"{n+=$3} END{print n+0}' "$LEDGER")
 succ="n/a"; tot=$((landed+flagged)); [ "$tot" -gt 0 ] && succ="$(( landed*100/tot ))%"
-ahead=$(git -C "$REPO" rev-list --count origin/main..HEAD 2>/dev/null); ahead=${ahead:-?}
+ahead=$(git -C "$REPO" rev-list --count ${DROVER_UPSTREAM}..HEAD 2>/dev/null); ahead=${ahead:-?}
 brahead=0
 for b in $(git -C "$REPO" for-each-ref --format='%(refname:short)' 'refs/heads/fleet/*' 2>/dev/null); do
-  [ "$(git -C "$REPO" rev-list --count origin/main.."$b" 2>/dev/null)" -gt 0 ] 2>/dev/null && brahead=$((brahead+1))
+  [ "$(git -C "$REPO" rev-list --count ${DROVER_UPSTREAM}.."$b" 2>/dev/null)" -gt 0 ] 2>/dev/null && brahead=$((brahead+1))
 done
 approved=0
 if [ -d "$STATE/approved" ]; then
@@ -29,10 +29,10 @@ needsland=$(ls "$STATE/needs-land" 2>/dev/null | grep -c .); needsland=${needsla
 reviews=$(ls "$STATE/reviews" 2>/dev/null | grep -vc '^\.'); reviews=${reviews:-0}
 
 echo "FLEET SCOREBOARD — $today (UTC)"
-echo "  SHIPPED today   landed->local main: $landed   pushed(deploys): $pushes   commits deployed: $deployed"
+echo "  SHIPPED today   landed->local ${DROVER_MAIN_BRANCH}: $landed   pushed(deploys): $pushes   commits deployed: $deployed"
 echo "  integration     success rate: $succ   (landed $landed / flagged $flagged)"
-echo "  INVENTORY now   local main unpushed: $ahead   approved awaiting-land: $approved   in-review: $reviews"
+echo "  INVENTORY now   local ${DROVER_MAIN_BRANCH} unpushed: $ahead   approved awaiting-land: $approved   in-review: $reviews"
 echo "                  flagged (needs manual fix): $needsland   fleet branches ahead of origin: $brahead"
 fc=$("$DROVER_BIN"/fleet-completed-audit --count 2>/dev/null); fc=${fc:-?}
-echo "  INTEGRITY       beans 'completed' on main but code NOT landed: $fc   (run fleet-completed-audit for the list)"
+echo "  INTEGRITY       beans 'completed' on ${DROVER_MAIN_BRANCH} but code NOT landed: $fc   (run fleet-completed-audit for the list)"
 echo "  Read: low landed/pushed while inventory climbs => bottleneck is INTEGRATION, not capacity."

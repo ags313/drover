@@ -12,14 +12,16 @@
 # Exit 0 = healed or nothing to do. Exit 2 = refused (non-bean tracked changes exist: a human's work in
 # progress — leave it and alert, never discard it).
 set -euo pipefail
+# shellcheck source=drover-env
+. "$(dirname "$0")/drover-env"
 R="${1:?repo}"; G(){ git --git-dir="$R/.git" --work-tree="$R" "$@"; }
 b=$(G rev-parse --abbrev-ref HEAD)
-[ "$b" = main ] && exit 0
+[ "$b" = "${DROVER_MAIN_BRANCH}" ] && exit 0
 nonbean=$(G status --porcelain --untracked-files=no | awk '{print $2}' | grep -v '^\.beans/' || true)
 if [ -n "$nonbean" ]; then echo "REFUSED: $R on $b with non-bean changes: $(echo "$nonbean" | cut -c1-200)"; exit 2; fi
 BK="${DROVER_HOME:-$HOME/.local/share/drover}/backups/beans-drift-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$(dirname "$BK")"; cp -R "$R/.beans" "$BK"
-G switch -f -q main
+G switch -f -q ${DROVER_MAIN_BRANCH}
 python3 - "$BK" "$R/.beans" <<'PY'
 import sys, os, re, shutil
 bk, dst = sys.argv[1], sys.argv[2]
@@ -45,5 +47,5 @@ PY
 changed=$(G status --porcelain .beans | awk '{print $2}')
 # shellcheck disable=SC2086
 [ -n "$changed" ] && G add -- $changed && G commit -q --only \
-  -m "chore(beans): heal-drift — restored main from $b, board merged newest-wins (backup $BK)" -- $changed
-echo "HEALED: $R $b -> main; beans merged: $(echo "$changed" | grep -c . || true); backup $BK"
+  -m "chore(beans): heal-drift — restored ${DROVER_MAIN_BRANCH} from $b, board merged newest-wins (backup $BK)" -- $changed
+echo "HEALED: $R $b -> ${DROVER_MAIN_BRANCH}; beans merged: $(echo "$changed" | grep -c . || true); backup $BK"

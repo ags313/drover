@@ -242,7 +242,7 @@ owner_sync(){ mkdir -p "$STATE/owner" "$STATE/double"; local f s b seen=""
     case "$wk" in *" $oo "*) continue;; esac   # owner is mid-task — never yank an active bean
     { [ -f "$STATE/approved/$ob" ] || [ -f "$STATE/reviews/$ob" ]; } && continue
     chk=$((chk+1)); obr="fleet/${oo}-${ob}"; on=0
-    git -C "$REPO" show-ref -q "refs/heads/$obr" && on=$(git -C "$REPO" rev-list --count --no-merges "main..$obr" 2>/dev/null)
+    git -C "$REPO" show-ref -q "refs/heads/$obr" && on=$(git -C "$REPO" rev-list --count --no-merges "${DROVER_MAIN_BRANCH}..$obr" 2>/dev/null)
     # empty branch => release at 30m (coder took it, produced nothing). NON-empty but idle + not in the
     # pipeline => release at 45m (recovery-set markers on real branches once starved dispatch to empty).
     if [ "${on:-0}" -eq 0 ]; then rm -f "$of"; log "STALE-OWNER: released $ob (owner $oo idle, empty branch, ${oag}m old)"
@@ -414,8 +414,8 @@ reap_tasks(){
     free=0; case "$state" in done|idle|MISSING) free=1;; esac
     bf=$(cd "$REPO" && git ls-files .beans | grep -m1 "^.beans/$bean--" || true)
     if [ -n "$bf" ]; then
-      st=$(cd "$REPO" && git show "main:$bf" 2>/dev/null | awk '/^status:/{print $2; exit}')
-      case "$st" in completed|scrapped) rm -f "$f"; log "RELEASED $a — $bean is $st on main (held ${age}m)"; continue;; esac
+      st=$(cd "$REPO" && git show "${DROVER_MAIN_BRANCH}:$bf" 2>/dev/null | awk '/^status:/{print $2; exit}')
+      case "$st" in completed|scrapped) rm -f "$f"; log "RELEASED $a — $bean is $st on ${DROVER_MAIN_BRANCH} (held ${age}m)"; continue;; esac
     fi
     holder=$(grep -l -- "	$bean	" "$TASKS"/* 2>/dev/null | grep -v "/$a$" | head -1 || true)
     if [ -n "$holder" ]; then rm -f "$f"; log "RELEASED $a — $bean was re-routed to $(basename "$holder") (held ${age}m)"; continue; fi
@@ -479,8 +479,8 @@ top_up_queue(){
   # but the dispatch guard reads `main:`. A drifted base enqueues beans already completed on main;
   # refill skips them all and every coder idles behind a misleading "queue empty". Fail closed.
   local base; base=$(cd "$REPO" && git rev-parse --abbrev-ref HEAD 2>/dev/null)
-  if [ "$base" != main ]; then
-    log "REPO OFF MAIN (on '$base') — NOT topping up from a drifted base (would enqueue completed beans). Restore \$DROVER_REPO to main."
+  if [ "$base" != "${DROVER_MAIN_BRANCH}" ]; then
+    log "REPO OFF MAIN (on '$base') — NOT topping up from a drifted base (would enqueue completed beans). Restore \$DROVER_REPO to ${DROVER_MAIN_BRANCH}."
     return 0
   fi
   # WIP CAP backpressure: at/over the integration backlog cap, enqueue NO new beans (followups + landing
@@ -527,7 +527,7 @@ integration_pick(){  # $1 = free coder seat under the WIP cap
     { echo "# LAND FOLLOWUP — $b (integration lane, $(date +%F)) — approved work that can't land; rebase it"
       echo; echo "Blocker: $why"; echo
       [ "$br" = "fleet/$a-$b" ] || printf 'Start from the approved branch in YOUR worktree:\n\n    git checkout -B fleet/%s-%s %s\n\nYou own this land now. Commit only on fleet/%s-%s; never touch the other seat'"'"'s branch/worktree.\n\n' "$a" "$b" "$br" "$a" "$b"
-      echo "1. Rebase onto current local main (no merge commits). 2. Resolve keeping BOTH sides' intent; never revert landed work; REGENERATE generated files instead of hand-merging (never commit one by hand — see DROVER_GENERATED). 3. If the blocker is a failing test: the suite PASSES on main, so your branch's change or a stale assertion breaks it — read the gate log named above, fix the cause (not the assertion) unless main legitimately changed the contract. 4. Build + the bean's related tests green, every commit builds alone. Commit, name the SHA, announce DONE."
+      echo "1. Rebase onto current local ${DROVER_MAIN_BRANCH} (no merge commits). 2. Resolve keeping BOTH sides' intent; never revert landed work; REGENERATE generated files instead of hand-merging (never commit one by hand — see DROVER_GENERATED). 3. If the blocker is a failing test: the suite PASSES on ${DROVER_MAIN_BRANCH}, so your branch's change or a stale assertion breaks it — read the gate log named above, fix the cause (not the assertion) unless ${DROVER_MAIN_BRANCH} legitimately changed the contract. 4. Build + the bean's related tests green, every commit builds alone. Commit, name the SHA, announce DONE."
     } > "$brief"
     rm -f "$STATE/needs-land/$b" "$STATE/approved/$b"; echo "$a" > "$STATE/owner/$b"
     mkdir -p "$STATE/followups"; printf '%s\t%s\n' "$b" "$brief" >> "$STATE/followups/$a"
@@ -618,11 +618,11 @@ refill(){
     if owner_blocks "$bean" "$a"; then log "SKIP $bean for $a — owned by $(cat "$STATE/owner/$bean"); one bean, one coder"; continue; fi
     if [ -f "$STATE/reviews/$bean" ] || [ -f "$STATE/approved/$bean" ] || [ -f "$STATE/noop-held/$bean" ]; then log "SKIP $bean — awaiting review, landing, or held after no-op rounds; no coder re-dispatch"; continue; fi
     bf=$(cd "$REPO" && git ls-files .beans | grep -m1 "^.beans/$bean--")
-    if [ -z "$bf" ] || ! (cd "$REPO" && git cat-file -e "main:$bf" 2>/dev/null); then
-      log "SKIP $bean — not on main (commit the bean file first); left out of the queue"; continue
+    if [ -z "$bf" ] || ! (cd "$REPO" && git cat-file -e "${DROVER_MAIN_BRANCH}:$bf" 2>/dev/null); then
+      log "SKIP $bean — not on ${DROVER_MAIN_BRANCH} (commit the bean file first); left out of the queue"; continue
     fi
     # only open beans are dispatched: a completed/scrapped/draft bean in the queue is a queueing error
-    st=$(cd "$REPO" && git show "main:$bf" 2>/dev/null | awk '/^status:/{print $2; exit}')
+    st=$(cd "$REPO" && git show "${DROVER_MAIN_BRANCH}:$bf" 2>/dev/null | awk '/^status:/{print $2; exit}')
     case "$st" in todo|in-progress) ;; *) log "SKIP $bean — status '$st' is not dispatchable"; continue;; esac
     # A queue entry can go STALE between top-up and pop: the lead can mark a bean
     # blocked-by another in between. Measured 2026-09-08 — a bean was gated behind
@@ -647,7 +647,7 @@ refill(){
       log "SKIP $bean — epic $_epic at train cap ($(epic_cap) in flight); deferred until it drains"; continue
     fi
     out=$(cd "$REPO" && "$DROVER_BIN"/fleet assign "$bean" "$a" 2>&1 | tail -1); rc=$?
-    if [ $rc -ne 0 ] || printf '%s' "$out" | grep -qiE 'error|not on main|unknown agent|syntax'; then
+    if [ $rc -ne 0 ] || printf '%s' "$out" | grep -qiE "error|not on ${DROVER_MAIN_BRANCH}|unknown agent|syntax"; then
       log "DISPATCH $bean -> $a FAILED (${out:0:80}) — bean requeued, agent left free"; printf '' > "$Q/$(date +%s)-$bean"; continue
     fi
     "$DROVER_BIN"/fleet-track dispatch "$a" "$bean" >/dev/null 2>&1
@@ -717,16 +717,16 @@ inventory_alert(){
   [ -f "$m" ] && age=$(( ( $(date +%s) - $(drover_mtime "$m" 2>/dev/null || echo 0) ) / 60 ))
   [ "$age" -lt 30 ] && return 0
   : > "$m"
-  local ahead cap; ahead=$(cd "$REPO" && git rev-list --count origin/main..HEAD 2>/dev/null || echo 0)
+  local ahead cap; ahead=$(cd "$REPO" && git rev-list --count ${DROVER_UPSTREAM}..HEAD 2>/dev/null || echo 0)
   cap=$(cat "$STATE/inventory-warn" 2>/dev/null); cap="${cap:-15}"
-  [ "${ahead:-0}" -ge "$cap" ] && log "INVENTORY WARN: local main $ahead commit(s) ahead of origin (undeployed) >= $cap — verify+push via fleet-push"
+  [ "${ahead:-0}" -ge "$cap" ] && log "INVENTORY WARN: local ${DROVER_MAIN_BRANCH} $ahead commit(s) ahead of origin (undeployed) >= $cap — verify+push via fleet-push"
   local cm="$STATE/last-completed-audit" cage=999
   [ -f "$cm" ] && cage=$(( ( $(date +%s) - $(drover_mtime "$cm" 2>/dev/null || echo 0) ) / 60 ))
   if [ "$cage" -ge 60 ]; then
     : > "$cm"
     local fc; fc=$(capped 120 "$DROVER_BIN"/fleet-completed-audit --count 2>/dev/null || echo 0)
     ( capped 900 "$DROVER_BIN"/fleet-completed-audit >/dev/null 2>&1 ) &   # refresh the cache off the tick
-    [ "${fc:-0}" -gt 0 ] && log "INTEGRITY WARN: $fc bean(s) 'completed' on main but code NOT landed — run fleet-completed-audit; reconcile (re-land or reopen)"
+    [ "${fc:-0}" -gt 0 ] && log "INTEGRITY WARN: $fc bean(s) 'completed' on ${DROVER_MAIN_BRANCH} but code NOT landed — run fleet-completed-audit; reconcile (re-land or reopen)"
   fi
 }
 
@@ -736,11 +736,11 @@ heal_repo(){
   # require main. Restore main ourselves when the tree carries cleanly; leave a real conflict for a
   # human. Pin --git-dir/--work-tree so a stray core.worktree can't redirect the switch.
   local base; base=$(git --git-dir="$REPO/.git" --work-tree="$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null)
-  [ "$base" = main ] && return 0
-  if git --git-dir="$REPO/.git" --work-tree="$REPO" switch main >/dev/null 2>&1; then
-    log "AUTO-HEALED \$DROVER_REPO from '$base' back to main"
+  [ "$base" = "${DROVER_MAIN_BRANCH}" ] && return 0
+  if git --git-dir="$REPO/.git" --work-tree="$REPO" switch ${DROVER_MAIN_BRANCH} >/dev/null 2>&1; then
+    log "AUTO-HEALED \$DROVER_REPO from '$base' back to ${DROVER_MAIN_BRANCH}"
   else
-    log "REPO OFF MAIN (on '$base') — switch to main blocked (conflict/untracked); dispatch+land paused. Restore \$DROVER_REPO."
+    log "REPO OFF MAIN (on '$base') — switch to ${DROVER_MAIN_BRANCH} blocked (conflict/untracked); dispatch+land paused. Restore \$DROVER_REPO."
   fi
 }
 
@@ -756,7 +756,7 @@ auto_land(){
   # FIRST in the tick and skips while a land holds .land-lock; with lands running back to back the old
   # order (land, then push) starved the deploy — 62 commits sat unpushed (2026-09-22).
   [ -d "$STATE/.push-lock" ] && return 0
-  [ "$(cd "$REPO" && git rev-parse --abbrev-ref HEAD 2>/dev/null)" = main ] || return 0
+  [ "$(cd "$REPO" && git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "${DROVER_MAIN_BRANCH}" ] || return 0
   # BOUNDED: exactly ONE fleet-land-bean per tick under a lock (stale-reclaimed) so two never overlap
   # and thrash the box. Newest approved first.
   local LK="$STATE/.land-lock"
@@ -794,7 +794,7 @@ route_land_conflicts(){
     [ -n "$seat" ] || { log "LAND-ROUTE $b: no live coder — flag kept"; continue; }
     mkdir -p "$FLEET_BRIEFS" "$STATE/followups"
     bt="${DROVER_BUILD:-run the project build}"; [ -n "${DROVER_TEST_CHANGED:-}" ] && bt="$bt; $DROVER_TEST_CHANGED"
-    printf '# Landing fix round: %s\n\nApproved, but it does not land on current main:\n\n    %s\n\nPrevious owner: %s. It is yours now.\n\n1. Branch fleet/%s-%s from current main; cherry-pick this bean'"'"'s commits (git log main..<old branch> --grep %s); resolve there. Never hand-merge a generated file (see DROVER_GENERATED): take main'"'"'s copy and regenerate.\n2. If main already has the work, say so and announce DONE "already on main".\n3. %s\n4. Report REBASED/VERIFIED/DONE with SHAs; fleet-done %s %s DONE "<one line>" <report>\n' \
+    printf '# Landing fix round: %s\n\nApproved, but it does not land on current '"${DROVER_MAIN_BRANCH}"':\n\n    %s\n\nPrevious owner: %s. It is yours now.\n\n1. Branch fleet/%s-%s from current '"${DROVER_MAIN_BRANCH}"'; cherry-pick this bean'"'"'s commits (git log '"${DROVER_MAIN_BRANCH}"'..<old branch> --grep %s); resolve there. Never hand-merge a generated file (see DROVER_GENERATED): take '"${DROVER_MAIN_BRANCH}"''"'"'s copy and regenerate.\n2. If '"${DROVER_MAIN_BRANCH}"' already has the work, say so and announce DONE "already on '"${DROVER_MAIN_BRANCH}"'".\n3. %s\n4. Report REBASED/VERIFIED/DONE with SHAs; fleet-done %s %s DONE "<one line>" <report>\n' \
       "$b" "$reason" "${owner:-none}" "$seat" "$b" "$b" "$bt" "$seat" "$b" > "$FLEET_BRIEFS/land-$b.md"
     grep -q -- "^$b	" "$STATE/followups/$seat" 2>/dev/null || printf '%s\t%s\n' "$b" "$FLEET_BRIEFS/land-$b.md" >> "$STATE/followups/$seat"   # never queue the same bean twice
     echo "$seat" > "$STATE/owner/$b"; rm -f "$f" "$STATE/approved/$b"
@@ -820,11 +820,11 @@ auto_push(){
   # (fleet-verify-main) runs on a clean worktree first; on a cumulative RED we do NOT push and PAUSE
   # landing so the red base can't cascade. Never force. Backgrounded under a push-lock.
   [ -f "$STATE/land-paused" ] && return 0
-  [ "$(cd "$REPO" && git rev-parse --abbrev-ref HEAD 2>/dev/null)" = main ] || return 0
+  [ "$(cd "$REPO" && git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "${DROVER_MAIN_BRANCH}" ] || return 0
   [ -d "$STATE/.land-lock" ] && return 0          # a land is mid-flight — let it finish first
   backoff_wait && return 0                        # a recent gate failure: wait out the backoff
   load_ok || return 0                             # the machine is short of memory: do not start a gate now
-  local ahead; ahead=$(cd "$REPO" && git rev-list --count origin/main..HEAD 2>/dev/null)
+  local ahead; ahead=$(cd "$REPO" && git rev-list --count ${DROVER_UPSTREAM}..HEAD 2>/dev/null)
   [ "${ahead:-0}" -gt 0 ] || return 0
   local PK="$STATE/.push-lock"
   if ! mkdir "$PK" 2>/dev/null; then
@@ -842,11 +842,11 @@ auto_push(){
   fi
   ( sh -c 'echo $PPID' > "$PK/pid"; cd "$REPO"
     # The gate is a heavy run: it takes the push slot, so it never stacks on top of other suites.
-    "$DROVER_BIN"/fleet-slot run --push -- "$DROVER_BIN"/fleet-verify-main main >"$STATE/auto-push-verify.log" 2>&1; vrc=$?
+    "$DROVER_BIN"/fleet-slot run --push -- "$DROVER_BIN"/fleet-verify-main ${DROVER_MAIN_BRANCH} >"$STATE/auto-push-verify.log" 2>&1; vrc=$?
     if [ "$vrc" -eq 0 ] || [ "$vrc" -eq 3 ]; then rm -f "$STATE/push-backoff"; else backoff_fail; fi
     if [ "$vrc" -eq 0 ]; then
-      out=$(git push origin main 2>&1 | tail -4)
-      if printf '%s' "$out" | grep -q "main -> main"; then
+      out=$(git push "${DROVER_REMOTE}" ${DROVER_MAIN_BRANCH} 2>&1 | tail -4)
+      if printf '%s' "$out" | grep -q "${DROVER_MAIN_BRANCH} -> ${DROVER_MAIN_BRANCH}"; then
         printf '%s\tPUSHED\t%s\n' "$(date -u +%FT%TZ)" "$ahead" >> "$LEDGER" 2>/dev/null
         log "AUTO-PUSH: $ahead commit(s) -> origin (full-suite green)"
       elif printf '%s' "$out" | grep -qi "Everything up-to-date"; then :   # someone else pushed it: done, not held
@@ -893,7 +893,7 @@ observe_tick(){
     "$DROVER_BIN"/fleet-alert send "empty-review-${f%:}" "empty review: ${f%:}" "${rest} — re-run the review; it does not count" >/dev/null 2>&1; done
   # A live seat works on a fresh base: a seat hundreds of commits behind main wastes its whole assignment.
   "$DROVER_BIN"/fleet-stale-worktree --max 300 2>/dev/null | while read -r _ seat rest; do
-    "$DROVER_BIN"/fleet-alert send "stale-base-${seat%:}" "${seat%:} works on a stale base" "${rest} — start the next bean from a fresh branch off origin/main" >/dev/null 2>&1; done
+    "$DROVER_BIN"/fleet-alert send "stale-base-${seat%:}" "${seat%:} works on a stale base" "${rest} — start the next bean from a fresh branch off ${DROVER_UPSTREAM}" >/dev/null 2>&1; done
   "$DROVER_BIN"/fleet-landed-check --hours 24 2>/dev/null | while read -r _ bean rest; do
     "$DROVER_BIN"/fleet-alert send "unproven-${bean%:}" "${bean%:} marked completed without landed code" "${rest} — reopen it or record the landing commit" >/dev/null 2>&1; done
   "$DROVER_BIN"/fleet-observe 2>&1 | while read -r l; do log "OBSERVE $l"; done

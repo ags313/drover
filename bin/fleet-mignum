@@ -18,8 +18,8 @@ mkdir -p "$DROVER_HOME"; touch "$RES"
 until mkdir "$LOCK" 2>/dev/null; do sleep 0.2; done; trap 'rmdir "$LOCK"' EXIT
 prev=$(awk -F'\t' -v b="$bean" '$2==b{print $1; exit}' "$RES")
 if [ -n "$prev" ]; then echo "$prev"; exit 0; fi
-git -C "$DROVER_REPO" fetch -q origin main 2>/dev/null || true
-max=$( { git -C "$DROVER_REPO" ls-tree --name-only origin/main "$DIR/"
+git -C "$DROVER_REPO" fetch -q "${DROVER_REMOTE}" ${DROVER_MAIN_BRANCH} 2>/dev/null || true
+max=$( { git -C "$DROVER_REPO" ls-tree --name-only ${DROVER_UPSTREAM} "$DIR/"
          for b in $(git -C "$DROVER_REPO" for-each-ref --format='%(refname:short)' refs/heads/fleet/); do
            git -C "$DROVER_REPO" ls-tree -r --name-only "$b" -- "$DIR" 2>/dev/null; done
          cut -f1 "$RES"; } | sed 's#.*/##' | grep -oE '^[0-9]{3}' | sort -n | tail -1)

@@ -39,7 +39,7 @@ ledger(){ printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$1" "$bean" >> "$LEDGER" 2
 # auto_land skips (needs-land) forever, clogging the queue and starving coders.
 flag(){ echo "$1" > "$STATE/needs-land/$bean"; rm -f "$STATE/approved/$bean"; ledger FLAGGED; echo "SKIP $bean — $1"; }
 
-[ "$(MAIN rev-parse --abbrev-ref HEAD 2>/dev/null)" = main ] || { flag "repo not on main"; exit 1; }
+[ "$(MAIN rev-parse --abbrev-ref HEAD 2>/dev/null)" = "${DROVER_MAIN_BRANCH}" ] || { flag "repo not on ${DROVER_MAIN_BRANCH}"; exit 1; }
 
 # resolve the bean's branch: prefer the owner's, else the unique one
 owner=$(cat "$STATE/owner/$bean" 2>/dev/null | tr -d '[:space:]')
@@ -56,9 +56,9 @@ fi
 
 # the bean's own commits = main..br. Cherry-pick only NON-merge work commits (branches that merged main
 # carry merge commits that just re-bring main, already on main). Refuse a stale/huge branch.
-picks=$(MAIN rev-list --reverse --no-merges "main..$br" 2>/dev/null)
+picks=$(MAIN rev-list --reverse --no-merges "${DROVER_MAIN_BRANCH}..$br" 2>/dev/null)
 if [ -z "$picks" ]; then
-  flag "nothing ahead of main on $br (already landed?)"
+  flag "nothing ahead of ${DROVER_MAIN_BRANCH} on $br (already landed?)"
   MAIN update-ref -d "refs/heads/$br" 2>/dev/null; rm -f "$STATE/approved/$bean"
   ( cd "$REPO" && beans update "$bean" -s completed >/dev/null 2>&1 )
   echo "note: $bean had no new commits — cleared approved marker"; exit 0
@@ -69,7 +69,7 @@ n_picks=$(printf '%s\n' "$picks" | grep -c .)
 # ISOLATED scratch worktree at current main; cherry-pick there. WT() = the worktree's own HEAD.
 wt="$STATE/land-wt/$bean.$$"
 rm -rf "$wt"; mkdir -p "$(dirname "$wt")"
-MAIN worktree add -q --detach "$wt" main || { flag "worktree add failed"; exit 1; }
+MAIN worktree add -q --detach "$wt" ${DROVER_MAIN_BRANCH} || { flag "worktree add failed"; exit 1; }
 WT(){ git -C "$wt" "$@"; }
 base=$(WT rev-parse HEAD)
 cleanup(){ WT cherry-pick --abort 2>/dev/null; MAIN worktree remove --force "$wt" 2>/dev/null; rm -rf "$wt"; }
@@ -97,9 +97,9 @@ tip=$(WT rev-parse HEAD)
 if [ "$tip" = "$base" ]; then   # every commit was already on main: nothing to land, nothing to flag
   cleanup; rm -f "$STATE/approved/$bean" "$STATE/needs-land/$bean"; ledger ALREADY-LANDED
   ( cd "$REPO" && beans update "$bean" -s completed >/dev/null 2>&1 )
-  echo "note: $bean is already on main (via $br) — cleared approved marker"; exit 0
+  echo "note: $bean is already on ${DROVER_MAIN_BRANCH} (via $br) — cleared approved marker"; exit 0
 fi
-diffnames=$(WT diff --name-only main "$tip")
+diffnames=$(WT diff --name-only ${DROVER_MAIN_BRANCH} "$tip")
 
 # a fresh worktree has no deps; symlink the repo's installed ones so a typecheck/test resolves imports
 for d in ${DROVER_CLONE_DIRS:-node_modules}; do
@@ -136,7 +136,7 @@ if [ -n "${DROVER_TEST_CHANGED:-}" ]; then
 fi
 
 if [ "${FLEET_LAND_DRY:-0}" = 1 ]; then
-  cleanup; echo "DRY $bean via $br ($n_picks commit) — clean cherry-pick, gates OK; would ff main to ${tip:0:9} (no write)"; exit 0
+  cleanup; echo "DRY $bean via $br ($n_picks commit) — clean cherry-pick, gates OK; would ff ${DROVER_MAIN_BRANCH} to ${tip:0:9} (no write)"; exit 0
 fi
 # advance LOCAL main by fast-forward only (never a merge, never a push). Serial caller avoids races.
 # main moving mid-land (a harvest or bean commit) is a RACE, not a land failure: do NOT flag. flag()
@@ -161,10 +161,10 @@ if [ ${#board[@]} -gt 0 ]; then
 fi
 # main advanced mid-land: bean-only drift -> replay onto it (the gated code is unchanged); code drift ->
 # retry next tick, which re-cherry-picks and re-gates against the new main.
-if ! MAIN merge-base --is-ancestor main "$tip"; then
-  drift=$(MAIN diff --name-only "$(WT merge-base HEAD main)" main -- . ':(exclude).beans')
-  if [ -n "$drift" ]; then cleanup; echo "RETRY $bean — main code moved during land; stays approved, re-lands next tick"; exit 3; fi
-  WT rebase -q -X theirs main 2>"$STATE/land-$bean-rebase.log" || { WT rebase --abort 2>/dev/null; cleanup; echo "RETRY $bean — bean-only rebase failed ($STATE/land-$bean-rebase.log)"; exit 3; }
+if ! MAIN merge-base --is-ancestor ${DROVER_MAIN_BRANCH} "$tip"; then
+  drift=$(MAIN diff --name-only "$(WT merge-base HEAD ${DROVER_MAIN_BRANCH})" ${DROVER_MAIN_BRANCH} -- . ':(exclude).beans')
+  if [ -n "$drift" ]; then cleanup; echo "RETRY $bean — ${DROVER_MAIN_BRANCH} code moved during land; stays approved, re-lands next tick"; exit 3; fi
+  WT rebase -q -X theirs ${DROVER_MAIN_BRANCH} 2>"$STATE/land-$bean-rebase.log" || { WT rebase --abort 2>/dev/null; cleanup; echo "RETRY $bean — bean-only rebase failed ($STATE/land-$bean-rebase.log)"; exit 3; }
   tip=$(WT rev-parse HEAD)
 fi
 if ! MAIN merge --ff-only "$tip" 2>"$STATE/land-$bean-ff.log"; then cleanup; echo "RETRY $bean — ff failed ($STATE/land-$bean-ff.log); stays approved"; exit 3; fi
@@ -172,4 +172,4 @@ cleanup; rm -f "$STATE/needs-land/$bean"
 ( cd "$REPO" && beans update "$bean" -s completed >/dev/null 2>&1 )
 rm -f "$STATE/approved/$bean" "$STATE/owner/$bean"
 ledger LANDED
-echo "LANDED $bean via $br ($n_picks commit) -> local main $(MAIN rev-parse --short HEAD); NOT pushed"
+echo "LANDED $bean via $br ($n_picks commit) -> local ${DROVER_MAIN_BRANCH} $(MAIN rev-parse --short HEAD); NOT pushed"

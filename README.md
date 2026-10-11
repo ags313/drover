@@ -299,6 +299,8 @@ values as `${VAR:-value}` so an environment variable still wins. See [`examples/
 | Variable | Default | Meaning |
 |---|---|---|
 | `DROVER_REPO` | — (required) | Main checkout of the project. Landings and bean checks happen here. |
+| `DROVER_MAIN_BRANCH` | `main` | Integration branch: landings fast-forward it, the queue only takes beans committed on it, the watcher heals the checkout back to it. |
+| `DROVER_REMOTE` | `origin` | Remote the main branch is pushed to and compared with (`$DROVER_REMOTE/$DROVER_MAIN_BRANCH`: "landed", "pushed", "ahead"). |
 | `DROVER_ROSTER` | 3 coders + 3 reviewers on claude/codex/opencode | `name:harness` pairs. Role = last word of the name. |
 | `DROVER_BUILD`, `DROVER_TEST` | empty | Build and single-test commands quoted into coder and reviewer briefs. `DROVER_BUILD` is also the build half of the cumulative push gate. |
 | `DROVER_AUTOLAND` | `0` | `1` lets the watcher land approved beans and push green batches. Off = landing stays with the lead. |

@@ -17,12 +17,12 @@ MAX = int(sys.argv[sys.argv.index('--max') + 1]) if '--max' in sys.argv else 300
 def drover_env():
     """The same config every bash script sees: source drover-env (next to this file) and read it back."""
     env = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'drover-env')
-    out = subprocess.run(['bash', '-c', '. "$0"; printf "%s\\0%s\\0%s" "$DROVER_REPO" "$FLEET_STATE" "$DROVER_LEAD_SEATS"', env],
+    out = subprocess.run(['bash', '-c', '. "$0"; printf "%s\\0%s\\0%s\\0%s" "$DROVER_REPO" "$FLEET_STATE" "$DROVER_LEAD_SEATS" "$DROVER_UPSTREAM"', env],
                          capture_output=True, text=True, check=True).stdout.split('\0')
     return out
 
 
-REPO, STATE, LEADS = drover_env()
+REPO, STATE, LEADS, UPSTREAM = drover_env()
 if not REPO:
     sys.exit('fleet-stale-worktree: set DROVER_REPO (env or ~/.config/drover/config)')
 LEADS = set(LEADS.split())
@@ -55,9 +55,9 @@ for a in agents:
         t = run('git', '-C', p, 'log', '-1', '--format=%ct').stdout.strip()
         return int(t) if t.isdigit() else 0
     top = max(cands, key=head_time)
-    behind = run('git', '-C', top, 'rev-list', '--count', 'HEAD..origin/main').stdout.strip()
+    behind = run('git', '-C', top, 'rev-list', '--count', f'HEAD..{UPSTREAM}').stdout.strip()
     if behind.isdigit() and int(behind) > MAX:
         bad += 1
         br = run('git', '-C', top, 'branch', '--show-current').stdout.strip() or 'detached'
-        print(f'STALE {name}: {behind} commits behind origin/main on {br} ({os.path.basename(top)})')
+        print(f'STALE {name}: {behind} commits behind {UPSTREAM} on {br} ({os.path.basename(top)})')
 sys.exit(1 if bad else 0)

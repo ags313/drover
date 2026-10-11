@@ -18,7 +18,7 @@ set -u
 REPO="${DROVER_REPO:?set DROVER_REPO}"
 BUILD="${DROVER_BUILD:-}"; TEST_ALL="${DROVER_TEST_ALL:-}"
 LOGDIR="$FLEET_STATE/verify"; mkdir -p "$LOGDIR"
-ref="${1:-main}"
+ref="${1:-$DROVER_MAIN_BRANCH}"
 tip=$(git -C "$REPO" rev-parse "$ref" 2>/dev/null) || { echo "verify: bad ref '$ref'"; exit 2; }
 if [ -z "$BUILD" ] && [ -z "$TEST_ALL" ]; then
   echo "verify: neither DROVER_BUILD nor DROVER_TEST_ALL is set — cannot verify; refusing to green-light a push"; exit 3

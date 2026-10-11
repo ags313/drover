@@ -20,6 +20,7 @@ spends no turns — until that prompt arrives.**
 - Never commit the human's work in progress: `git commit --only -- <paths>`. Never `git stash` as a control —
   the stash stack is shared by every worktree.
 - One bean per agent at a time; never one bean on two agents. Beans live on `main` or not at all.
+  (`main` and `origin` throughout: the project's `DROVER_MAIN_BRANCH` and `DROVER_REMOTE`.)
 - Never judge an agent by `fleet status` or a short pane read — judge by artifacts (`fleet-track check`: code
   commits, last-commit age, report mtime).
 

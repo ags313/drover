@@ -83,4 +83,10 @@ s=$SECONDS; "$BIN"/fleet-slot run -- true 2>/dev/null; waited=$((SECONDS-s)); wa
 s=$SECONDS; "$BIN"/fleet-slot run --push -- true; waited=$((SECONDS-s)); wait $holder
 [ "$waited" -lt 1 ] && ok 'a push does not wait behind a general run' || bad "push waited ${waited}s behind a general run"
 
+# --- integration branch and remote ---------------------------------------------------------------------------
+up=$(DROVER_MAIN_BRANCH=trunk DROVER_REMOTE=fork bash -c '. "$0"; printf %s "$DROVER_UPSTREAM"' "$BIN/drover-env")
+[ "$up" = fork/trunk ] && ok 'DROVER_MAIN_BRANCH/DROVER_REMOTE set the upstream' || bad "upstream is '$up', want fork/trunk"
+def=$(bash -c '. "$0"; printf %s "$DROVER_UPSTREAM"' "$BIN/drover-env")
+[ "$def" = origin/main ] && ok 'upstream defaults to origin/main' || bad "default upstream is '$def'"
+
 [ "$fail" = 0 ] && echo 'all checker cases pass' || { echo 'checker cases FAILED'; exit 1; }

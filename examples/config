@@ -5,6 +5,11 @@
 # of it (herdr puts them under ~/.herdr/worktrees/<repo-name>/), and landings happen here.
 DROVER_REPO="${DROVER_REPO:-}"
 
+# The integration branch landings go to, and the remote it is pushed to. Set these when the project's
+# integration branch is not `main`, or when `origin` is not where it deploys (e.g. a fork: DROVER_REMOTE=fork).
+DROVER_MAIN_BRANCH="${DROVER_MAIN_BRANCH:-main}"
+DROVER_REMOTE="${DROVER_REMOTE:-origin}"
+
 # The seats: name:harness pairs. The role is the last word of the name (coder, reviewer, pm, architect,
 # analyst, sre, judge, design). Reviews are always routed to a reviewer on a DIFFERENT harness.
 # Harnesses fleet knows how to launch: claude codex opencode cursor grok agy.

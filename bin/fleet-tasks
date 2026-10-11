@@ -40,7 +40,7 @@ sync_tasks() {
       verdict=$(grep -oE 'VERDICT: (APPROVE|CHANGES)' "$rep" 2>/dev/null | tail -1 | awk '{print $2}')
       rounds=$(printf '%s' "$rep" | grep -oE 'r[0-9]+\.md$' | tr -dc '0-9')
     fi
-    [ -n "$bean" ] && [ "$bean" != "-" ] && landed=$(git -C "$ROOT" log --oneline origin/main --grep "$bean" 2>/dev/null | head -1 | awk '{print $1}')
+    [ -n "$bean" ] && [ "$bean" != "-" ] && landed=$(git -C "$ROOT" log --oneline ${DROVER_UPSTREAM} --grep "$bean" 2>/dev/null | head -1 | awk '{print $1}')
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$id" "$agent" "$role" "$harness" "${bean:--}" "$ts" "${fin:--}" "$(basename "${rep:--}")" "${verdict:--}" "${rounds:-1}" "${landed:--}" >> "$DB"
   done

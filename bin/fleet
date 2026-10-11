@@ -206,9 +206,9 @@ H
 refuse_dispatch() {
   local agent=$1 bean=$2 kind path
   kind=$(kind_of "$agent") || exit 2
-  path=$(git -C "$FLEET_ROOT" ls-tree -r --name-only main -- .beans/ 2>/dev/null | grep -m1 -E "\.beans/${bean}--" || true)
-  if [ -z "$path" ] || ! git -C "$FLEET_ROOT" cat-file -e "main:$path" 2>/dev/null; then
-    echo "bean $bean not on main" >&2
+  path=$(git -C "$FLEET_ROOT" ls-tree -r --name-only ${DROVER_MAIN_BRANCH} -- .beans/ 2>/dev/null | grep -m1 -E "\.beans/${bean}--" || true)
+  if [ -z "$path" ] || ! git -C "$FLEET_ROOT" cat-file -e "${DROVER_MAIN_BRANCH}:$path" 2>/dev/null; then
+    echo "bean $bean not on ${DROVER_MAIN_BRANCH}" >&2
     exit 2
   fi
 }
@@ -289,7 +289,7 @@ preview_sync_worktrees() {
   local spec name
   for spec in ${1:-$FLEET}; do
     name=${spec%%:*}
-    preview "$name" "" "fleet/$name" "merge main into worktree; drop stale seeds; re-seed WIP"
+    preview "$name" "" "fleet/$name" "merge ${DROVER_MAIN_BRANCH} into worktree; drop stale seeds; re-seed WIP"
   done
 }
 
@@ -599,33 +599,33 @@ check_beans() {
   # grep exits 1 on no match; under set -e that must not kill send/followup.
   ids=$(printf '%s' "$text" | grep -oE "$DROVER_BEAN_RE" | sort -u || true)
   [ -n "$ids" ] || return 0
-  local onmain; onmain=$(git -C "$FLEET_ROOT" ls-tree -r --name-only main -- .beans/ 2>/dev/null || true)
+  local onmain; onmain=$(git -C "$FLEET_ROOT" ls-tree -r --name-only ${DROVER_MAIN_BRANCH} -- .beans/ 2>/dev/null || true)
   for id in $ids; do
     case "$onmain" in *"/$id--"*) ;; *) missing="$missing $id" ;; esac   # no pipe: `printf | grep -q` dies of SIGPIPE under pipefail
   done
-  [ -n "$missing" ] && { echo "bean$missing not on main" >&2; exit 2; }
+  [ -n "$missing" ] && { echo "bean$missing not on ${DROVER_MAIN_BRANCH}" >&2; exit 2; }
   return 0
 }
 
 coder_prompt() {  # name kind bean scope
   cat <<P
 You are $1, the $2 CODER on a fleet team. Team lead = \`lead\` (a Claude session); the human is not watching you. Your job: bean $3.
-Work ONLY in this worktree ($(cwd_of "$1")). Your branch for THIS bean is \`fleet/$1-$3\` — one branch per BEAN, forked from current main. The lead puts you on it before you start; run \`git branch --show-current\` and confirm it before step 0. Steps:
-0. START ON CURRENT MAIN. \`git fetch origin; git merge main --no-edit\` — merge LOCAL \`main\`, not \`origin/main\`. origin can be stale when a landing has not been pushed (measured 2026-09-06: origin/main was 7 commits behind local main, and four agents truthfully reported REBASED against the wrong target). Measured 2026-09-06: 20 of 20 fleet branches contained none of main, several 400+ commits behind. A stale branch reviews code that will never ship as reviewed, and its merge DELETES work that landed after it diverged — one branch would have removed 652 lines including 399 of a test file. If the merge conflicts, resolve it now, not at landing time.
+Work ONLY in this worktree ($(cwd_of "$1")). Your branch for THIS bean is \`fleet/$1-$3\` — one branch per BEAN, forked from current ${DROVER_MAIN_BRANCH}. The lead puts you on it before you start; run \`git branch --show-current\` and confirm it before step 0. Steps:
+0. START ON CURRENT MAIN. \`git fetch "${DROVER_REMOTE}"; git merge ${DROVER_MAIN_BRANCH} --no-edit\` — merge LOCAL \`${DROVER_MAIN_BRANCH}\`, not \`${DROVER_UPSTREAM}\`. origin can be stale when a landing has not been pushed (measured 2026-09-06: ${DROVER_UPSTREAM} was 7 commits behind local ${DROVER_MAIN_BRANCH}, and four agents truthfully reported REBASED against the wrong target). Measured 2026-09-06: 20 of 20 fleet branches contained none of ${DROVER_MAIN_BRANCH}, several 400+ commits behind. A stale branch reviews code that will never ship as reviewed, and its merge DELETES work that landed after it diverged — one branch would have removed 652 lines including 399 of a test file. If the merge conflicts, resolve it now, not at landing time.
 1. \`beans show $3\` — read it fully. Follow the repository's own agent rules (CLAUDE.md / AGENTS.md or equivalent). If a pm or architect has written requirements for this bean, they are in $REPORTS — build to those, and say so if you disagree rather than quietly building something else.
 1b. BEFORE creating any new module, check whether it already exists. Two coders independently wrote the same new module for the same bean, with incompatible APIs, and only one could land. \`grep\` for the concept first.
 2. Implement the bean's unchecked items.${4:+ Scope from lead: $4}
 3. Verify, and keep the output — you will paste it. Run ${DROVER_BUILD:-the project build} and the tests you added or affected${DROVER_TEST:+ ($DROVER_TEST)}. A build that did not finish is not a passing build; wait for it. Grep compiler output for the real error shape (TypeScript errors start with a file path, not with the word error).
 3a. JEST RULE: run jest only as \`npx jest --runInBand --cacheDirectory /tmp/jest-cache-\$USER <files>\`. In a read-only sandbox point --cacheDirectory at a writable directory. Never run jest through \`node -e\` or patch jest internals: jest-worker forks children that re-run the inline script and fork more, without bound.
 3b. PROVE THE FIX FIRES. Revert your change, watch your new test fail, restore it, watch it pass. A test you have never seen fail is not a test. This is what caught a fail-open gate in the lead's own commit this week.
-4. This worktree may start with the human's pre-existing UNCOMMITTED changes, seeded so it builds like the main checkout. Do not review, modify, revert or commit them. Commit ONLY files you changed plus the bean file: \`git add <your files> .beans/<bean file>\` then \`git commit -m "<conventional message>"\` on branch fleet/$1-$3. You MAY \`git fetch\` and \`git merge main\` (step 0 requires it). Never git checkout/reset/stash the human's files, never commit to main, never push, never apply DB migrations, never start the dev server.
+4. This worktree may start with the human's pre-existing UNCOMMITTED changes, seeded so it builds like the main checkout. Do not review, modify, revert or commit them. Commit ONLY files you changed plus the bean file: \`git add <your files> .beans/<bean file>\` then \`git commit -m "<conventional message>"\` on branch fleet/$1-$3. You MAY \`git fetch\` and \`git merge ${DROVER_MAIN_BRANCH}\` (step 0 requires it). Never git checkout/reset/stash the human's files, never commit to ${DROVER_MAIN_BRANCH}, never push, never apply DB migrations, never start the dev server.
 5. Keep the bean checklist current with \`beans update $3 --body-replace-old '- [ ] ...' --body-replace-new '- [x] ...'\`.
 6. When done, write $REPORTS/$1-$3.md: summary, files changed, decisions, open questions, and the PASTED output of the build and the tests. A command you did not run cannot appear there.
 6b. THEN ANNOUNCE IT. Run exactly:
       fleet-done $1 $3 DONE \"<one line: what changed and whether it is landable>\" $REPORTS/$1-$3.md
     Use BLOCKED instead of DONE if you cannot proceed, or CHANGES if you are handing back a fix round. This is how the lead learns you finished — it does not watch your pane and it does not trust the status field, which reports \`done\` while an agent is still mid-turn. If you skip this, your work sits unnoticed.
     End the report with exactly these three lines:
-REBASED: YES | NO — output of \`git merge-base --is-ancestor main HEAD && echo YES\` (local main, not origin/main)
+REBASED: YES | NO — output of \`git merge-base --is-ancestor ${DROVER_MAIN_BRANCH} HEAD && echo YES\` (local ${DROVER_MAIN_BRANCH}, not ${DROVER_UPSTREAM})
 VERIFIED: BUILD <exit> TESTS <passed>/<total> — and the revert-test-restore result from 3b
 DONE $REPORTS/$1-$3.md
 REBASED: NO means the work is not finished. Go back to step 0 — do not hand a stale branch to a reviewer.
@@ -642,13 +642,13 @@ reviewer_prompt() {  # name kind coder bean
   cat <<P
 You are $1, the $2 REVIEWER on a fleet team (lead = \`lead\`). Review bean $4, implemented by $3 on branch \`fleet/$3-$4\` (one branch per bean). If that ref does not exist, this bean predates the change and the branch is \`fleet/$3\` — resolve it FIRST with \`git rev-parse --verify fleet/$3-$4 || echo use fleet/$3\` and use whichever exists. You are reviewing a DIFFERENT model's work: be rigorous, concrete and unsentimental; findings must be actionable.${scope:+
 Lead scope given to the coder (judge against THIS, not the raw bean text): $scope}
-"main moved while you reviewed" is NEVER a blocker. Main advances during every review here; staleness is the
-lead's to resolve and the lead re-verifies against current main before every merge. Say LANDABLE: YES when the
+"${DROVER_MAIN_BRANCH} moved while you reviewed" is NEVER a blocker. Main advances during every review here; staleness is the
+lead's to resolve and the lead re-verifies against current ${DROVER_MAIN_BRANCH} before every merge. Say LANDABLE: YES when the
 work is sound and name the base you tested. Raise a blocker only for a defect in the work, a conflict you
-actually hit while cherry-picking the NAMED commits onto a detached main, or a proof that is missing.
+actually hit while cherry-picking the NAMED commits onto a detached ${DROVER_MAIN_BRANCH}, or a proof that is missing.
 Work ONLY in this worktree ($(cwd_of "$1")). Steps:
 1. \`beans show $4\` (requirements) and \`cat $REPORTS/$3-$4.md\` (the coder's report).
-2. With BR set to the branch you resolved above: \`git diff main...\$BR --stat\` then \`git diff main...\$BR\`. Judge against the bean's checklist and the repository's own agent rules (CLAUDE.md / AGENTS.md or equivalent).
+2. With BR set to the branch you resolved above: \`git diff ${DROVER_MAIN_BRANCH}...\$BR --stat\` then \`git diff ${DROVER_MAIN_BRANCH}...\$BR\`. Judge against the bean's checklist and the repository's own agent rules (CLAUDE.md / AGENTS.md or equivalent).
 3. To build/test their code: \`git checkout --detach \$BR\` in THIS worktree (if git refuses because of local changes: \`git stash -u\` first (INCLUDE untracked — the pre-seeded WIP has tracked and untracked parts that only compile together; this worktree is yours alone) and \`git stash pop\` after returning with \`git checkout fleet/$1\`). Run ${DROVER_BUILD:-the project build} and the relevant tests${DROVER_TEST:+ ($DROVER_TEST)}.
 3b. JEST RULE: run jest only as \`npx jest --runInBand --cacheDirectory /tmp/jest-cache-\$USER <files>\`. In a read-only sandbox point --cacheDirectory at a writable directory. Never run jest through \`node -e\` or patch jest internals: jest-worker forks children that re-run the inline script and fork more, without bound.
 4. Write $REPORTS/$1-review-$4-by-$3.md: findings as CRITICAL/HIGH/MEDIUM/LOW, each with file:line, why it is wrong and the concrete fix; what you verified (commands + results, PASTED — a command you did not run cannot appear here); unchecked bean items the coder missed. End with exactly these three lines:
@@ -686,7 +686,7 @@ cmd_assign() {
     [ -n "$(find "$prev" -mmin -180 2>/dev/null)" ] || continue
     pbf=$(cd "$FLEET_ROOT" 2>/dev/null && git ls-files .beans 2>/dev/null | grep -m1 "^.beans/$pb--") || true
     [ -n "$pbf" ] || continue
-    pst=$(cd "$FLEET_ROOT" 2>/dev/null && git show "main:$pbf" 2>/dev/null | awk '/^status:/{print $2; exit}')
+    pst=$(cd "$FLEET_ROOT" 2>/dev/null && git show "${DROVER_MAIN_BRANCH}:$pbf" 2>/dev/null | awk '/^status:/{print $2; exit}')
     case "$pst" in todo|in-progress) ;; *) continue ;; esac
     ls "$REPORTS"/*"-review-$pb-by-$coder.md" >/dev/null 2>&1 && continue
     echo "WARNING: $coder has an UNREVIEWED report for $pb (still '$pst'). Route it before reusing the seat:" >&2
@@ -709,9 +709,9 @@ cmd_assign() {
     if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null | grep -v '^??' || true)" ]; then
       echo "NOTE: $coder's worktree has uncommitted tracked changes — staying on '$cur'. Not switching to $bbranch; a branch switch must never discard work." >&2
     elif [ "$cur" != "$bbranch" ]; then
-      git -C "$wt" fetch origin main --quiet 2>/dev/null || true
-      if git -C "$wt" checkout -B "$bbranch" origin/main --quiet 2>/dev/null; then
-        echo "branch: $coder -> $bbranch (forked from origin/main)" >&2
+      git -C "$wt" fetch "${DROVER_REMOTE}" ${DROVER_MAIN_BRANCH} --quiet 2>/dev/null || true
+      if git -C "$wt" checkout -B "$bbranch" ${DROVER_UPSTREAM} --quiet 2>/dev/null; then
+        echo "branch: $coder -> $bbranch (forked from ${DROVER_UPSTREAM})" >&2
       else
         echo "NOTE: could not put $coder on $bbranch; it stays on '$cur'" >&2
       fi
@@ -726,7 +726,7 @@ cmd_assign() {
   # returns before the agent has taken the message and the turn is silently
   # dropped; measured 2026-09-07, six of six parallel dispatches lost.
   # Dispatch SERIALLY for the same reason — parallel `&` loses prompts.
-  herdr agent prompt "$coder" "New bean: read $bf and follow it exactly. It assigns you $bean. Merge main first: git merge main --no-edit" --wait --until working --until done --until blocked --timeout 100000 | jq -r --arg b "$bean" '"\(.result.agent.name) <- \($b): \(.result.agent.agent_status)"'
+  herdr agent prompt "$coder" "New bean: read $bf and follow it exactly. It assigns you $bean. Merge ${DROVER_MAIN_BRANCH} first: git merge ${DROVER_MAIN_BRANCH} --no-edit" --wait --until working --until done --until blocked --timeout 100000 | jq -r --arg b "$bean" '"\(.result.agent.name) <- \($b): \(.result.agent.agent_status)"'
   # The lead's manual `fleet assign` wrote ONLY the ledger, while the watcher's
   # auto-dispatch writes the ledger AND the task file. fleet-track and the
   # reaper both read the TASK FILE, so a hand-assigned seat looked stale to
@@ -851,30 +851,30 @@ cmd_landable() {  # approved and flagged beans: the branch fleet-land-bean takes
       *\?) printf '%-12s %-8s %-36s\n' "$b" "$st" "(${br%\?} branches: set state/owner/$b)"; continue ;;
     esac
     # NEW: commits whose change is not on main yet (patch-id, so a cherry-picked or squashed land counts as on main)
-    new=$(git -C "$FLEET_ROOT" cherry main "$br" | grep -c '^+' || true)
-    merge=$(git -C "$FLEET_ROOT" merge-tree --write-tree main "$br" >/dev/null 2>&1 && echo clean || echo CONFLICT)
-    if [ "$new" = 0 ]; then note="(already on main)"
-    elif [ -z "$(git -C "$FLEET_ROOT" diff --name-only "main...$br" -- . ':(exclude).beans')" ]; then note="(bean file only)"; fi
-    subj=$(git -C "$FLEET_ROOT" log --no-merges --format=%s "main..$br" | grep -v '^chore(beans)' | tail -1 || true)
+    new=$(git -C "$FLEET_ROOT" cherry ${DROVER_MAIN_BRANCH} "$br" | grep -c '^+' || true)
+    merge=$(git -C "$FLEET_ROOT" merge-tree --write-tree ${DROVER_MAIN_BRANCH} "$br" >/dev/null 2>&1 && echo clean || echo CONFLICT)
+    if [ "$new" = 0 ]; then note="(already on ${DROVER_MAIN_BRANCH})"
+    elif [ -z "$(git -C "$FLEET_ROOT" diff --name-only "${DROVER_MAIN_BRANCH}...$br" -- . ':(exclude).beans')" ]; then note="(bean file only)"; fi
+    subj=$(git -C "$FLEET_ROOT" log --no-merges --format=%s "${DROVER_MAIN_BRANCH}..$br" | grep -v '^chore(beans)' | tail -1 || true)
     printf '%-12s %-8s %-36s %-3s %-8s %s\n' "$b" "$st" "${br#fleet/}" "$new" "$merge" "${note:-$subj}"
     [ $st = flagged ] && printf '%-12s ↳ %s\n' "" "$(head -1 "$f")"
   done
-  echo "MERGE is each branch against main alone: two clean branches can still conflict once one lands."
+  echo "MERGE is each branch against ${DROVER_MAIN_BRANCH} alone: two clean branches can still conflict once one lands."
 }
 
 sync_worktree() {  # <name> — bring an idle agent's worktree up to main without touching the user's tree
   local wt; wt=$(herdr agent get "$1" | jq -r '.result.agent.cwd'); wt=$(git -C "$wt" rev-parse --show-toplevel)
   local st; st=$(state_of "$1"); case $st in idle|done) ;; *) echo "$1: skipped (state=$st)"; return 0;; esac
-  local base; base=$(git -C "$wt" merge-base HEAD main)
+  local base; base=$(git -C "$wt" merge-base HEAD ${DROVER_MAIN_BRANCH})
   # 1) seeded copies of files that main has since changed: drop the local copy (main's version supersedes the seed)
-  comm -12 <(git -C "$wt" diff --name-only | sort) <(git -C "$FLEET_ROOT" diff --name-only "$base" main | sort) \
+  comm -12 <(git -C "$wt" diff --name-only | sort) <(git -C "$FLEET_ROOT" diff --name-only "$base" ${DROVER_MAIN_BRANCH} | sort) \
     | while read -r f; do git -C "$wt" checkout -q -- "$f"; done
   # 2) seeded untracked files that main now tracks
-  comm -12 <(git -C "$wt" ls-files --others --exclude-standard | sort) <(git -C "$FLEET_ROOT" ls-tree -r --name-only main | sort) \
+  comm -12 <(git -C "$wt" ls-files --others --exclude-standard | sort) <(git -C "$FLEET_ROOT" ls-tree -r --name-only ${DROVER_MAIN_BRANCH} | sort) \
     | while read -r f; do rm -f "$wt/$f"; done
   # 3) merge
   local err; err=$(mktemp)
-  if git -C "$wt" merge -q --no-edit main 2>"$err"; then rm -f "$err"; else echo "$1: MERGE FAILED"; head -3 "$err"; rm -f "$err"; git -C "$wt" merge --abort 2>/dev/null; return 1; fi
+  if git -C "$wt" merge -q --no-edit ${DROVER_MAIN_BRANCH} 2>"$err"; then rm -f "$err"; else echo "$1: MERGE FAILED"; head -3 "$err"; rm -f "$err"; git -C "$wt" merge --abort 2>/dev/null; return 1; fi
   # 4) re-seed the user's current uncommitted WIP for paths not already dirty here
   [ "$FLEET_SEED_WIP" = 1 ] && { local patch inc; patch=$(mktemp); git -C "$FLEET_ROOT" diff HEAD --binary > "$patch"
     inc=$(comm -23 <(git -C "$FLEET_ROOT" diff --name-only HEAD | sort) <(git -C "$wt" status --short | awk '{print $2}' | sort) | sed 's/^/--include=/' | tr '\n' ' ')
@@ -882,7 +882,7 @@ sync_worktree() {  # <name> — bring an idle agent's worktree up to main withou
     # refresh STALE seeds: a seeded file the human has since edited in main (the agent is idle, so its own work is committed)
     git -C "$FLEET_ROOT" diff --name-only HEAD | while read -r f; do [ -f "$FLEET_ROOT/$f" ] && [ -f "$wt/$f" ] && ! cmp -s "$FLEET_ROOT/$f" "$wt/$f" && { cp "$FLEET_ROOT/$f" "$wt/$f"; echo "  refreshed stale seed: $f" >&2; }; done
     git -C "$FLEET_ROOT" ls-files --others --exclude-standard -z | while IFS= read -r -d '' f; do [ -e "$wt/$f" ] || { mkdir -p "$wt/$(dirname "$f")"; cp -R "$FLEET_ROOT/$f" "$wt/$f"; }; done; }
-  echo "$1: $(git -C "$wt" log -1 --format=%h) (main=$(git -C "$FLEET_ROOT" log -1 --format=%h)) dirty=$(git -C "$wt" status --short | grep -vc '^??') untracked=$(git -C "$wt" status --short | grep -c '^??')"
+  echo "$1: $(git -C "$wt" log -1 --format=%h) (${DROVER_MAIN_BRANCH}=$(git -C "$FLEET_ROOT" log -1 --format=%h)) dirty=$(git -C "$wt" status --short | grep -vc '^??') untracked=$(git -C "$wt" status --short | grep -c '^??')"
 }
 cmd_sync() {
   sync_skills
@@ -1024,7 +1024,7 @@ if [ "$FLEET_DRY_RUN" = 1 ]; then
   case "${1:-}" in
     assign)   preview_assign "$2" "${3:-}" "${4:-}" ;;
     review)   preview_review "$2" "${3:-}" "${4:-}" ;;
-    land)     preview "$2" "" "fleet/$2" "merge fleet/$2 into main" ;;
+    land)     preview "$2" "" "fleet/$2" "merge fleet/$2 into ${DROVER_MAIN_BRANCH}" ;;
     rm)       preview "$2" "" "fleet/$2" "rm workspace" ;;
     sync)
       preview_skills

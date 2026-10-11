@@ -21,11 +21,11 @@ import sys
 
 def drover_repo():
     env = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'drover-env')
-    return subprocess.run(['bash', '-c', '. "$0"; printf "%s" "${DROVER_REPO:-}"', env],
-                          capture_output=True, text=True, check=True).stdout
+    return subprocess.run(['bash', '-c', '. "$0"; printf "%s\\0%s" "${DROVER_REPO:-}" "$DROVER_UPSTREAM"', env],
+                          capture_output=True, text=True, check=True).stdout.split('\0')
 
 
-REPO = drover_repo()
+REPO, UPSTREAM = drover_repo()
 if not REPO:
     sys.exit('fleet-landed-check: set DROVER_REPO (env or ~/.config/drover/config)')
 hours = int(sys.argv[sys.argv.index('--hours') + 1]) if '--hours' in sys.argv else 24
@@ -35,13 +35,13 @@ def git(*a):
     return subprocess.run(['git', '-C', REPO, *a], capture_output=True, text=True, timeout=60)
 
 
-base = git('rev-list', '-1', '--before', f'{hours} hours ago', 'origin/main').stdout.strip()
-files = sorted({l for l in git('log', 'origin/main', f'--since={hours} hours ago', '--name-only', '--format=',
+base = git('rev-list', '-1', '--before', f'{hours} hours ago', UPSTREAM).stdout.strip()
+files = sorted({l for l in git('log', UPSTREAM, f'--since={hours} hours ago', '--name-only', '--format=',
                                 '--', '.beans/').stdout.splitlines() if l.endswith('.md')})
 SHA = re.compile(r'(?<![0-9a-fA-F])[0-9a-f]{7,40}(?![0-9a-fA-F])')   # a sha256 (64 hex) is a hash, not a commit
 bad = 0
 for f in files:
-    now = git('show', f'origin/main:{f}').stdout
+    now = git('show', f'{UPSTREAM}:{f}').stdout
     st = re.search(r'^status:\s*(\S+)', now, re.M)
     if not st or st.group(1) != 'completed':
         continue
@@ -56,17 +56,17 @@ for f in files:
     proven = False
     for s in shas:
         full = git('rev-parse', '--verify', '--quiet', f'{s}^{{commit}}').stdout.strip()
-        if full and git('merge-base', '--is-ancestor', full, 'origin/main').returncode == 0:
+        if full and git('merge-base', '--is-ancestor', full, UPSTREAM).returncode == 0:
             proven = True
             break
     if not proven:
-        for line in git('log', 'origin/main', f'--grep={bean}', '--format=%H', '-n', '50').stdout.split():
+        for line in git('log', UPSTREAM, f'--grep={bean}', '--format=%H', '-n', '50').stdout.split():
             changed = git('show', '--name-only', '--format=', line).stdout.split()
             if any(not c.startswith('.beans/') for c in changed):
                 proven = True
                 break
     if not proven:
         bad += 1
-        why = 'names no commit' if not shas else f'none of {len(shas)} named commit(s) is on origin/main'
+        why = 'names no commit' if not shas else f'none of {len(shas)} named commit(s) is on {UPSTREAM}'
         print(f'UNPROVEN {bean}: completed but {why}')
 sys.exit(1 if bad else 0)

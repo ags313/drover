@@ -78,7 +78,7 @@ except Exception: print("")' 2>/dev/null)
     note="## Unblock (re-dispatched by fleet-unblock $(date +%F))
 
 This bean was BLOCKED: \"$short\". Re-examine before doing anything:
-- Is the blocker STILL valid? A dependency may have landed, main may be green now, or a prior finding may already be fixed.
+- Is the blocker STILL valid? A dependency may have landed, ${DROVER_MAIN_BRANCH} may be green now, or a prior finding may already be fixed.
 - If it cleared: do the bean's work and verify it.
 - If it is a real technical blocker you can fix: fix it.
 - If it GENUINELY needs a human: put one line \`HUMAN: <the single decision needed>\` in your report and announce BLOCKED with that. Do NOT re-block without re-examining."

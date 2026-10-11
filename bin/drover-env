@@ -60,6 +60,13 @@ FLEET_CAPS="${FLEET_CAPS:-$HOME/.config/drover/caps}"   # spend caps, re-read ev
 DROVER_ROSTER="${DROVER_ROSTER:-claude-coder:claude codex-coder:codex opencode-coder:opencode claude-reviewer:claude codex-reviewer:codex opencode-reviewer:opencode}"
 DROVER_LEAD_SEATS="${DROVER_LEAD_SEATS:-lead lead-backup}"   # never restarted by fleet-yolo
 
+# The integration branch every landing goes to, and the remote it is pushed to. Landings, the queue's
+# "is the bean on main" checks, the watcher's heal and every "is it landed/pushed" check use these. A project
+# whose integration branch is not `main`, or whose `origin` is not where it deploys, sets them in its config.
+DROVER_MAIN_BRANCH="${DROVER_MAIN_BRANCH:-main}"
+DROVER_REMOTE="${DROVER_REMOTE:-origin}"
+DROVER_UPSTREAM="$DROVER_REMOTE/$DROVER_MAIN_BRANCH"
+
 # Where herdr puts each seat's worktree, and the beans id prefix (read from the repo's .beans.yml).
 DROVER_WORKTREES="${DROVER_WORKTREES:-$HOME/.herdr/worktrees/$(basename "${DROVER_REPO:-repo}")}"
 if [ -z "${DROVER_BEAN_PREFIX:-}" ] && [ -f "${DROVER_REPO:-/nonexistent}/.beans.yml" ]; then

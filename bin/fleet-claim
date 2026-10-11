@@ -62,9 +62,9 @@ reap)
     [ -n "${bean:-}" ] || continue
     # Read the board from origin/main, not the local checkout: a stale local main reported
     # landed beans as still open and kept their claims.
-    bf=$(git -C "$ROOT" ls-tree -r --name-only origin/main .beans 2>/dev/null | grep -m1 "^.beans/$bean--" || true)
+    bf=$(git -C "$ROOT" ls-tree -r --name-only ${DROVER_UPSTREAM} .beans 2>/dev/null | grep -m1 "^.beans/$bean--" || true)
     st="missing"
-    [ -n "$bf" ] && st=$(git -C "$ROOT" show "origin/main:$bf" 2>/dev/null | awk '/^status:/{print $2; exit}')
+    [ -n "$bf" ] && st=$(git -C "$ROOT" show "${DROVER_UPSTREAM}:$bf" 2>/dev/null | awk '/^status:/{print $2; exit}')
     # ...but a bean filed on a branch is not on main YET: a claim under 24h old on a missing bean is live work,
     # not stale. Releasing those dropped ~300 claims mid-change from one seat whose bean was still branch-only.
     if [ "$st" = missing ] && [ -n "${ts:-}" ]; then
@@ -91,8 +91,8 @@ reap)
   ;;
 hot)
   for b in $(git -C "$ROOT" branch --list 'fleet/*' --format='%(refname:short)'); do
-    n=$(git -C "$ROOT" cherry origin/main "$b" 2>/dev/null | grep -c '^+')
-    [ "${n:-0}" -gt 0 ] && git -C "$ROOT" diff --name-only origin/main..."$b" 2>/dev/null | grep -v '^\.beans/'
+    n=$(git -C "$ROOT" cherry ${DROVER_UPSTREAM} "$b" 2>/dev/null | grep -c '^+')
+    [ "${n:-0}" -gt 0 ] && git -C "$ROOT" diff --name-only ${DROVER_UPSTREAM}..."$b" 2>/dev/null | grep -v '^\.beans/'
   done | sort | uniq -c | sort -rn | awk '$1>1 {printf "  %2s branches  %s\n", $1, $2}' | head -20 ;;
 *) sed -n '2,10p' "$0"; exit 2 ;;
 esac
