@@ -71,10 +71,16 @@ wt="$STATE/land-wt/$bean.$$"
 rm -rf "$wt"; mkdir -p "$(dirname "$wt")"
 MAIN worktree add -q --detach "$wt" main || { flag "worktree add failed"; exit 1; }
 WT(){ git -C "$wt" "$@"; }
+base=$(WT rev-parse HEAD)
 cleanup(){ WT cherry-pick --abort 2>/dev/null; MAIN worktree remove --force "$wt" 2>/dev/null; rm -rf "$wt"; }
 
 for c in $picks; do   # SHAs are single tokens — word-splitting is safe here
-  if ! WT cherry-pick -x "$c" 2>/dev/null; then
+  if ! WT cherry-pick -x "$c" >/dev/null 2>&1; then
+    # stopped with nothing to commit: this commit's change is already on main (landed under another sha)
+    if [ -z "$(WT diff --name-only --diff-filter=U)" ] && WT diff --quiet && WT diff --cached --quiet; then
+      WT cherry-pick --skip >/dev/null 2>&1 || { cleanup; flag "cherry-pick $c empty but could not be skipped"; exit 1; }
+      continue
+    fi
     # a conflict only in bean files is safe to take --theirs; a conflict in any other file is a manual land
     nonbean=0
     while IFS= read -r f; do [ -n "$f" ] || continue; case "$f" in .beans/*) ;; *) nonbean=$((nonbean+1));; esac; done < <(WT diff --name-only --diff-filter=U)
@@ -88,6 +94,11 @@ for c in $picks; do   # SHAs are single tokens — word-splitting is safe here
   fi
 done
 tip=$(WT rev-parse HEAD)
+if [ "$tip" = "$base" ]; then   # every commit was already on main: nothing to land, nothing to flag
+  cleanup; rm -f "$STATE/approved/$bean" "$STATE/needs-land/$bean"; ledger ALREADY-LANDED
+  ( cd "$REPO" && beans update "$bean" -s completed >/dev/null 2>&1 )
+  echo "note: $bean is already on main (via $br) — cleared approved marker"; exit 0
+fi
 diffnames=$(WT diff --name-only main "$tip")
 
 # a fresh worktree has no deps; symlink the repo's installed ones so a typecheck/test resolves imports
