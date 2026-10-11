@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.drover.graphify-nightly</string>
+  <string>@LABEL@</string>
   <key>ProgramArguments</key>
   <array>
     <string>@BIN@/graphify-nightly</string>
@@ -17,6 +17,7 @@
   </dict>
   <key>EnvironmentVariables</key>
   <dict>
+    @PROJECT_ENV@
     <key>PATH</key>
     <!-- If graphify (or a language runtime it needs, e.g. node) lives outside these, add its dir here:
          launchd does not read your shell's rc files, so PATH must be set explicitly. -->

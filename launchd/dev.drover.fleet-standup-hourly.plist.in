@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.drover.fleet-standup-hourly</string>
+  <string>@LABEL@</string>
   <key>ProgramArguments</key>
   <array>
     <string>@BIN@/fleet-standup-auto</string>
@@ -12,6 +12,7 @@
   <integer>3600</integer>
   <key>EnvironmentVariables</key>
   <dict>
+    @PROJECT_ENV@
     <key>PATH</key>
     <string>@BIN@:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>

@@ -7,6 +7,7 @@ Description=drover hourly standup (fleet-standup-auto)
 Type=oneshot
 ExecStart=@BIN@/fleet-standup-auto
 Environment="PATH=@BIN@:@PATH@"
+@PROJECT_ENV@
 StandardOutput=append:@LOGS@/fleet-standup-hourly.out
 StandardError=append:@LOGS@/fleet-standup-hourly.err
 

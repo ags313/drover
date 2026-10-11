@@ -13,6 +13,7 @@ RestartSec=10
 # Default scheduling on purpose, never Nice/IOSchedulingClass=idle: a throttled watcher ran every step 30-60x
 # slower and its tick stalled for 76 minutes on a busy machine (docs/LESSONS.md, launchd's Background class).
 Environment="PATH=@BIN@:@PATH@"
+@PROJECT_ENV@
 StandardOutput=append:@LOGS@/fleet-watch.out
 StandardError=append:@LOGS@/fleet-watch.err
 

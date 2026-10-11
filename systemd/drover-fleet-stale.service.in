@@ -7,6 +7,7 @@ Description=drover stale-process report (fleet stale --report)
 Type=oneshot
 ExecStart=@BIN@/fleet stale --report
 Environment="PATH=@BIN@:@PATH@"
+@PROJECT_ENV@
 StandardOutput=append:@LOGS@/fleet-stale.out
 StandardError=append:@LOGS@/fleet-stale.err
 

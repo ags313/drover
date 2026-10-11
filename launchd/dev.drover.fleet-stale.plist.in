@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.drover.fleet-stale</string>
+  <string>@LABEL@</string>
   <key>ProgramArguments</key>
   <array>
     <string>@BIN@/fleet</string>
@@ -16,6 +16,7 @@
   <true/>
   <key>EnvironmentVariables</key>
   <dict>
+    @PROJECT_ENV@
     <key>PATH</key>
     <string>@BIN@:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>

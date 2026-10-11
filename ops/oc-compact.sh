@@ -16,13 +16,19 @@ set -uo pipefail
 DB="$HOME/.local/share/opencode/opencode.db"; NEW="$DB.compact"; OUT="$HOME/.local/share/opencode-archive/$(date +%F)"
 mkdir -p "$OUT"
 say(){ echo "$(date +%H:%M:%S) $*"; }
-# The watcher runs under launchd on macOS and as a systemd user unit elsewhere (install.sh).
+# Every project's watcher opens this DB (install.sh --project runs one per project): pause all that are running,
+# under launchd on macOS or as systemd user units elsewhere, and resume exactly those.
+PAUSED=""
 if command -v launchctl >/dev/null; then
-  pause_watch(){ launchctl bootout "gui/$(id -u)/dev.drover.fleet-watch" 2>/dev/null; }
-  resume_watch(){ launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.drover.fleet-watch.plist" 2>/dev/null; say "fleet-watch resumed"; }
+  pause_watch(){ local p l; for p in "$HOME"/Library/LaunchAgents/dev.drover.fleet-watch*.plist; do
+      [ -f "$p" ] || continue; l=$(basename "$p" .plist)
+      launchctl bootout "gui/$(id -u)/$l" 2>/dev/null && PAUSED="$PAUSED $p"; done; }
+  resume_watch(){ local p; for p in $PAUSED; do launchctl bootstrap "gui/$(id -u)" "$p" 2>/dev/null; done
+    say "fleet-watch resumed:${PAUSED:- none was running}"; }
 else
-  pause_watch(){ systemctl --user stop drover-fleet-watch.service 2>/dev/null; }
-  resume_watch(){ systemctl --user start drover-fleet-watch.service 2>/dev/null; say "fleet-watch resumed"; }
+  pause_watch(){ PAUSED=$(systemctl --user list-units --state=active --plain --no-legend 'drover-fleet-watch*.service' 2>/dev/null | awk '{printf " %s", $1}')
+    [ -z "$PAUSED" ] || systemctl --user stop $PAUSED 2>/dev/null; }
+  resume_watch(){ [ -z "$PAUSED" ] || systemctl --user start $PAUSED 2>/dev/null; say "fleet-watch resumed:${PAUSED:- none was running}"; }
 fi
 
 free_gb=$(drover_free_gb "$DB")
@@ -32,7 +38,7 @@ free_gb=$(drover_free_gb "$DB")
 for t in sqlite3 lsof; do command -v "$t" >/dev/null || { say "$t not installed — aborting, nothing touched"; exit 1; }; done
 
 # 1. pause the watcher so nothing reopens the DB mid-swap
-pause_watch; say "fleet-watch paused"
+pause_watch; say "fleet-watch paused:${PAUSED:- none was running}"
 trap resume_watch EXIT
 
 # 2. snapshot + stop opencode (same as before)
