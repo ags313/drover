@@ -75,7 +75,9 @@ case "${1:-}" in
     # footprint above the process's own startup peak, not by a raw RSS threshold, or a healthy instance
     # gets killed every tick and re-pays its startup cost forever). One example, off by default:
     if [ -n "${FLEET_MCP_LEAK_PATTERN:-}" ] && [ "$DRY" != 1 ]; then
-      fp_mb() { vmmap --summary "$1" 2>/dev/null | awk '/^Physical footprint:/{v=$3; u=substr(v,length(v)); n=v+0; print int(u=="G"?n*1024:(u=="K"?n/1024:n)); exit}'; }
+      # Linux: proportional set size (shared pages split among their users), the closest to macOS's footprint.
+      fp_mb() { if [ -r "/proc/$1/smaps_rollup" ]; then awk '/^Pss:/{print int($2/1024); exit}' "/proc/$1/smaps_rollup"
+                else vmmap --summary "$1" 2>/dev/null | awk '/^Physical footprint:/{v=$3; u=substr(v,length(v)); n=v+0; print int(u=="G"?n*1024:(u=="K"?n/1024:n)); exit}'; fi; }
       fat=$(for p in $(pgrep -f "${FLEET_MCP_LEAK_PATTERN}"); do m=$(fp_mb "$p"); [ "${m:-0}" -gt "${FLEET_MCP_LEAK_MAX_MB:-3072}" ] && echo "$p"; done)
       if [ -n "$fat" ]; then
         kill -9 $fat 2>/dev/null

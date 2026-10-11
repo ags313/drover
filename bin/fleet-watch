@@ -802,11 +802,10 @@ route_land_conflicts(){
   done
 }
 # Load guard: never START a gate/build/test when free memory is low or the box is crowded with processes
-# (a memory-pressure incident came from gates starting on top of each other). Free = free+inactive+speculative
-# pages. Override: FLEET_MIN_FREE_GB (default 16), FLEET_MAX_PROCS (default 1500).
-load_ok(){ local ps free procs
-  ps=$(vm_stat | awk '/page size of/{print $8}'); ps=${ps:-16384}
-  free=$(vm_stat | awk -v ps="$ps" '/Pages (free|inactive|speculative)/{gsub("\\.","",$NF); n+=$NF} END{printf "%d", n*ps/1073741824}')
+# (a memory-pressure incident came from gates starting on top of each other). Free = drover_free_mem_gb.
+# Override: FLEET_MIN_FREE_GB (default 16), FLEET_MAX_PROCS (default 1500).
+load_ok(){ local free procs
+  free=$(drover_free_mem_gb)
   procs=$(ps -A -o pid= | wc -l | tr -d ' ')
   if [ "${free:-0}" -lt "${FLEET_MIN_FREE_GB:-16}" ] || [ "${procs:-0}" -gt "${FLEET_MAX_PROCS:-1500}" ]; then
     log "LOAD-GUARD: not starting heavy work (free ${free}GB < ${FLEET_MIN_FREE_GB:-16} or procs ${procs} > ${FLEET_MAX_PROCS:-1500})"; return 1; fi; return 0; }

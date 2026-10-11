@@ -48,6 +48,9 @@ DROVER_BEAN_RE="${DROVER_BEAN_RE:-${DROVER_BEAN_PREFIX}[a-z0-9]{4}}"
 #   drover_mtime FILE...          modification time, epoch seconds
 #   drover_size FILE              size in bytes
 #   drover_free_gb PATH           free GiB on PATH's filesystem (`df -g` is BSD-only; -P -k is POSIX)
+#   drover_free_mem_gb            memory available to new work, GiB: Linux MemAvailable; macOS free + inactive +
+#                                 speculative pages (vm_stat). Without either the answer was 0 and the load
+#                                 guard refused every gate.
 #   drover_clone SRC DST          copy a tree as a copy-on-write clone where the filesystem has them: BSD `cp -c` is
 #                                 APFS clonefile; GNU `cp --reflink=auto` clones on btrfs/XFS/bcachefs and
 #                                 falls back to a full copy (ext4: real disk and time).
@@ -71,3 +74,8 @@ else
   drover_date_parse(){ date -j -f "$1" "$2" +%s; }
 fi
 drover_free_gb(){ df -P -k "$1" | awk 'NR==2{print int($4/1048576)}'; }
+drover_free_mem_gb(){
+  if [ -r /proc/meminfo ]; then awk '/^MemAvailable:/{print int($2/1048576); exit}' /proc/meminfo; return; fi
+  local ps; ps=$(vm_stat | awk '/page size of/{print $8}'); ps=${ps:-16384}
+  vm_stat | awk -v ps="$ps" '/Pages (free|inactive|speculative)/{gsub("\\.","",$NF); n+=$NF} END{printf "%d", n*ps/1073741824}'
+}
