@@ -1,0 +1,20 @@
+# Rendered by install.sh into ~/.config/systemd/user. PATH below is the PATH install.sh ran with: user units
+# do not read your shell rc files, so rerun install.sh after a tool moves.
+[Unit]
+Description=drover lead heartbeat watchdog
+# launchd KeepAlive: restart forever, never give up after a burst of failures.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=@BIN@/lead-watchdog
+Restart=always
+RestartSec=10
+# Default scheduling on purpose, never Nice/IOSchedulingClass=idle: a throttled watcher ran every step 30-60x
+# slower and its tick stalled for 76 minutes on a busy machine (docs/LESSONS.md, launchd's Background class).
+Environment="PATH=@BIN@:@PATH@"
+StandardOutput=append:@LOGS@/lead-watchdog.out
+StandardError=append:@LOGS@/lead-watchdog.err
+
+[Install]
+WantedBy=default.target

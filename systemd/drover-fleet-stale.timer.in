@@ -1,0 +1,13 @@
+# Rendered by install.sh into ~/.config/systemd/user. PATH below is the PATH install.sh ran with: user units
+# do not read your shell rc files, so rerun install.sh after a tool moves.
+[Unit]
+Description=drover stale-process report every 5 min (timer)
+
+[Timer]
+# launchd: RunAtLoad + StartInterval 300
+OnActiveSec=10s
+OnUnitActiveSec=5min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

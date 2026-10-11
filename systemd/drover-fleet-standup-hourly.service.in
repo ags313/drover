@@ -1,0 +1,12 @@
+# Rendered by install.sh into ~/.config/systemd/user. PATH below is the PATH install.sh ran with: user units
+# do not read your shell rc files, so rerun install.sh after a tool moves.
+[Unit]
+Description=drover hourly standup (fleet-standup-auto)
+
+[Service]
+Type=oneshot
+ExecStart=@BIN@/fleet-standup-auto
+Environment="PATH=@BIN@:@PATH@"
+StandardOutput=append:@LOGS@/fleet-standup-hourly.out
+StandardError=append:@LOGS@/fleet-standup-hourly.err
+

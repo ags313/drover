@@ -1,0 +1,12 @@
+# Rendered by install.sh into ~/.config/systemd/user. PATH below is the PATH install.sh ran with: user units
+# do not read your shell rc files, so rerun install.sh after a tool moves.
+[Unit]
+Description=drover stale-process report (fleet stale --report)
+
+[Service]
+Type=oneshot
+ExecStart=@BIN@/fleet stale --report
+Environment="PATH=@BIN@:@PATH@"
+StandardOutput=append:@LOGS@/fleet-stale.out
+StandardError=append:@LOGS@/fleet-stale.err
+

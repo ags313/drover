@@ -11,17 +11,28 @@
 #
 # Why it matters to the fleet: every opencode seat writes this one database, and at 133 GB it ate the disk.
 set -uo pipefail
+# shellcheck source=../bin/drover-env
+. "$(dirname "$0")/../bin/drover-env"
 DB="$HOME/.local/share/opencode/opencode.db"; NEW="$DB.compact"; OUT="$HOME/.local/share/opencode-archive/$(date +%F)"
-PLIST="$HOME/Library/LaunchAgents/dev.drover.fleet-watch.plist"
 mkdir -p "$OUT"
 say(){ echo "$(date +%H:%M:%S) $*"; }
-resume_watch(){ launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; say "fleet-watch resumed"; }
+# The watcher runs under launchd on macOS and as a systemd user unit elsewhere (install.sh).
+if command -v launchctl >/dev/null; then
+  pause_watch(){ launchctl bootout "gui/$(id -u)/dev.drover.fleet-watch" 2>/dev/null; }
+  resume_watch(){ launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.drover.fleet-watch.plist" 2>/dev/null; say "fleet-watch resumed"; }
+else
+  pause_watch(){ systemctl --user stop drover-fleet-watch.service 2>/dev/null; }
+  resume_watch(){ systemctl --user start drover-fleet-watch.service 2>/dev/null; say "fleet-watch resumed"; }
+fi
 
-free_gb=$(df -g "$DB" | awk 'NR==2{print $4}')
+free_gb=$(drover_free_gb "$DB")
 [ "$free_gb" -ge "${MIN_FREE_GB:-65}" ] || { say "only ${free_gb} GB free; need >= ${MIN_FREE_GB:-65} GB for the compacted copy with margin — aborting"; exit 1; }
 
+# Every tool before anything is stopped: one found missing later would leave every opencode seat stopped for nothing.
+for t in sqlite3 lsof; do command -v "$t" >/dev/null || { say "$t not installed — aborting, nothing touched"; exit 1; }; done
+
 # 1. pause the watcher so nothing reopens the DB mid-swap
-launchctl bootout "gui/$(id -u)/dev.drover.fleet-watch" 2>/dev/null; say "fleet-watch paused"
+pause_watch; say "fleet-watch paused"
 trap resume_watch EXIT
 
 # 2. snapshot + stop opencode (same as before)
@@ -53,5 +64,5 @@ cnt_old=$(sqlite3 "$DB" "select count(*) from session"); cnt_new=$(sqlite3 "$NEW
 mv "$DB" "$DB.pre-compact" && rm -f "$DB-wal" "$DB-shm" && mv "$NEW" "$DB" || { say "swap failed — restore with: mv '$DB.pre-compact' '$DB'"; exit 1; }
 [ "$(sqlite3 "$DB" "PRAGMA quick_check;" | head -1)" = "ok" ] || { mv -f "$DB.pre-compact" "$DB"; say "swapped file failed check — original restored"; exit 1; }
 rm -f "$DB.pre-compact"
-say "done: opencode.db $(( $(stat -f %z "$DB") / 1073741824 )) GB, sessions $cnt_new, disk free $(df -g "$DB" | awk 'NR==2{print $4}') GB"
+say "done: opencode.db $(( $(drover_size "$DB") / 1073741824 )) GB, sessions $cnt_new, disk free $(drover_free_gb "$DB") GB"
 say "opencode is still stopped — restart the seats (panes are listed in $OUT/panes-before-compact.tsv)"

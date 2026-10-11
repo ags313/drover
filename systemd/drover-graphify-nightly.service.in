@@ -1,0 +1,12 @@
+# Rendered by install.sh into ~/.config/systemd/user. PATH below is the PATH install.sh ran with: user units
+# do not read your shell rc files, so rerun install.sh after a tool moves.
+[Unit]
+Description=drover nightly knowledge-graph rebuild (graphify-nightly)
+
+[Service]
+Type=oneshot
+ExecStart=@BIN@/graphify-nightly
+Environment="PATH=@BIN@:@PATH@"
+StandardOutput=append:@LOGS@/graphify-nightly.out
+StandardError=append:@LOGS@/graphify-nightly.err
+

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fleet-standup-auto — persist an artifact-based fleet standup once per scheduler tick while task
-# files exist (launchd runs it hourly). It reads fleet artifacts and git refs; it never contacts
+# files exist (launchd or a systemd timer runs it hourly). It reads fleet artifacts and git refs; it never contacts
 # production, deploys, migrates, or writes the project repository.
 set -euo pipefail
 # shellcheck source=drover-env

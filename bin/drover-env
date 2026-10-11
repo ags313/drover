@@ -9,7 +9,7 @@ DROVER_CONFIG="${DROVER_CONFIG:-$HOME/.config/drover/config}"
 
 # The directory these scripts are installed in (install.sh symlinks them into ~/.local/bin), and the
 # drover checkout they came from (for skills/ and docs/). Scripts call each other through
-# $DROVER_BIN, never through PATH: launchd's PATH is short, and `fleet` is also the name of an IDE CLI.
+# $DROVER_BIN, never through PATH: a service manager's PATH is short, and `fleet` is also the name of an IDE CLI.
 _drover_self="${BASH_SOURCE[0]}"
 DROVER_BIN="$(cd "$(dirname "$_drover_self")" && pwd)"
 while [ -L "$_drover_self" ]; do

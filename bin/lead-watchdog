@@ -2,7 +2,8 @@
 # lead-watchdog — zero-token standby: no model runs until the primary lead's heartbeat is stale.
 # The primary lead touches $FLEET_STATE/lead-heartbeat every few minutes while alive. When the file is
 # older than DROVER_TAKEOVER_SEC (default 45 min) this sends ONE prompt to the backup-lead seat and sets a
-# flag; the flag clears when the heartbeat is fresh again. launchd keeps it running (dev.drover.lead-watchdog).
+# flag; the flag clears when the heartbeat is fresh again. launchd (dev.drover.lead-watchdog) or systemd
+# (drover-lead-watchdog) keeps it running.
 # shellcheck source=drover-env
 . "$(dirname "$0")/drover-env"
 HB="$FLEET_STATE/lead-heartbeat"; FLAG="$FLEET_STATE/lead-takeover"; LOG="$(dirname "$FLEET_STATE")/watchdog.log"

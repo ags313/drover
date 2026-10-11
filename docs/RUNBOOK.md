@@ -6,7 +6,7 @@ running the fleet by hand.
 
 The primary lead touches `$FLEET_STATE/lead-heartbeat` (default
 `~/.local/share/drover/watch/state/lead-heartbeat`) every few minutes while alive. `lead-watchdog` (launchd
-`dev.drover.lead-watchdog`, no model, no tokens) checks that file every 5 minutes and sends the backup ONE
+`dev.drover.lead-watchdog` / systemd `drover-lead-watchdog`, no model, no tokens) checks that file every 5 minutes and sends the backup ONE
 prompt beginning `TAKE OVER` when it is older than 45 minutes. **The backup does nothing on a schedule —
 spends no turns — until that prompt arrives.**
 
@@ -20,13 +20,15 @@ spends no turns — until that prompt arrives.**
   commits, last-commit age, report mtime).
 
 ## The machinery
-- `fleet-watch run` (60 s loop; launchd `dev.drover.fleet-watch` keeps it running). It drains the inbox (agents
+- `fleet-watch run` (60 s loop; launchd `dev.drover.fleet-watch` or systemd user unit
+  `drover-fleet-watch` keeps it running). It drains the inbox (agents
   announce with `fleet-done`), routes cross-harness reviews, turns reviewer CHANGES into followups
   (`state/followups/<coder>`), sends PARTIAL (DONE with unchecked items) back to the same coder (3 strikes →
   `state/blocked`), retries unrouted DONEs (`state/reviews/<bean>`), refills free coders from the queue
   (files `<epoch>-<bean>`, ls order), harvests agent-filed beans onto main, and gates on budget and spend.
   **Patches to the script take effect only after a restart**:
-  `launchctl kickstart -k gui/$(id -u)/dev.drover.fleet-watch`, when no `herdr agent prompt` child is running.
+  `launchctl kickstart -k gui/$(id -u)/dev.drover.fleet-watch` (systemd: `systemctl --user restart
+  drover-fleet-watch`), when no `herdr agent prompt` child is running.
 - Watch it: `tail -f ~/.local/share/drover/watch/watch.log` for
   ROUTED|FOLLOWUP|PARTIAL|BLOCKED|DISPATCH|SKIP|STALE|BUDGET|LOOP|APPROVED|NO-OP|SEAT.
   `state/blocked` is the lead's inbox: every line is a decision only a human or the lead can make.
