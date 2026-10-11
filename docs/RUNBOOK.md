@@ -4,6 +4,10 @@ How the fleet is run day to day, written for a **backup lead**: a second agent s
 `lead-backup`) that takes over when the primary lead goes quiet. It is equally the checklist for a human
 running the fleet by hand.
 
+With several projects (`install.sh --project NAME`), every `~/.local/share/drover` path below is
+`~/.local/share/drover/projects/NAME`, every unit name carries `@NAME` (systemd) or `.NAME` (launchd), and each
+project has its own leads.
+
 The primary lead touches `$FLEET_STATE/lead-heartbeat` (default
 `~/.local/share/drover/watch/state/lead-heartbeat`) every few minutes while alive. `lead-watchdog` (launchd
 `dev.drover.lead-watchdog` / systemd `drover-lead-watchdog`, no model, no tokens) checks that file every 5 minutes and sends the backup ONE

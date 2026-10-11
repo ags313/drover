@@ -223,6 +223,26 @@ the default roster's harness CLIs (claude-code, codex, opencode; unfree allowed 
 and herdr's panes run outside that shell, so on NixOS install the same list in your profile; `install.sh` names
 any the units' PATH lacks. Check a change with `nix-shell --run 'bash eval/eval-checkers.sh'`.
 
+### Several projects
+
+One install can run several projects side by side, each with its own repository, roster, state and watcher,
+in one herdr:
+
+```bash
+./install.sh --project forum --repo ~/src/forum --load     # config: ~/.config/drover/projects/forum/config
+./install.sh --project shop  --repo ~/src/shop  --load     # state:  ~/.local/share/drover/projects/shop
+cd ~/src/forum && fleet up                                 # inside a checkout, fleet acts on its project
+DROVER_PROJECT=shop fleet status                           # anywhere else, name it
+```
+
+Seats are seeded as `forum-claude-coder`, `shop-codex-reviewer`, ...: herdr seat names are global, so no two
+projects may share one (install.sh warns when they do, and when two configs name the same repository). Each
+seat's shell carries `DROVER_PROJECT`, and a script run inside a project's worktree finds the project from its
+repository, so announcements always reach the right watcher. Units are `drover-fleet-watch@forum` (systemd)
+or `dev.drover.fleet-watch.forum` (launchd). The spend caps (`~/.config/drover/caps`) are shared: one machine,
+one budget. `fleet stale` reports every pane in herdr, so each project's instance reports the same table.
+Without `--project`, drover is the single-project install it always was.
+
 To land: follow [`docs/RUNBOOK.md`](docs/RUNBOOK.md). To stop new work while everything in flight finishes:
 `touch ~/.local/share/drover/watch/state/finish-first`.
 
