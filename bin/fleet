@@ -18,6 +18,7 @@
 #   fleet blocked                  screens of every blocked agent
 #   fleet rm <name>                close the agent's workspace and remove its worktree (branch kept)
 #   fleet land <coder>             merge fleet/<coder> into main, parking/restoring the user's staged WIP around it
+#   fleet landable                 approved and flagged beans: branch, commits not on main, clean/CONFLICT, subject
 #   fleet sync [name]              bring idle agents' worktrees up to main (drop stale seeds, merge, re-seed current WIP)
 #   fleet rules                    install the fleet-peers skill package for claude/codex/grok/opencode
 #   fleet stale [--kill|--report]  processes the agents left behind: orphans (pane gone), leftovers (dev/test
@@ -184,13 +185,19 @@ Report leftover/orphan/heavy processes. --kill sends signals; --report writes pa
 --dry-run  print agent, brief, branch, prompt; do not kill or report
 H
       ;;
+    landable) cat <<'H'
+fleet landable
+List approved and flagged beans: the branch fleet-land-bean would land, how many of its commits are
+not on main yet, whether it merges cleanly into main, and its subject. Read-only.
+H
+      ;;
     rules) cat <<'H'
 fleet rules
 Install pull-based fleet-peers plugin manifests for claude/codex/grok/opencode.
 --dry-run  print per-host diffs; write nothing
 H
       ;;
-    *) sed -n '2,28p' "$0" ;;
+    *) sed -n '2,29p' "$0" ;;
   esac
 }
 
@@ -821,6 +828,40 @@ Reviewed cross-harness by the fleet; lead-verified." 2>"$tmp.err"; then echo "me
   echo "staged entries restored: $(git -C "$FLEET_ROOT" diff --cached --name-only | wc -l | tr -d ' ')"; rm -f "$tmp" "$tmp.paths" "$tmp.err"
 }
 
+bean_branch() {  # <bean> -> the branch fleet-land-bean would land: the owner's, else the only fleet/*-<bean>
+  local owner br n
+  owner=$(cat "$FLEET_STATE/owner/$1" 2>/dev/null | tr -d '[:space:]' || true)
+  if [ -n "$owner" ] && git -C "$FLEET_ROOT" show-ref -q "refs/heads/fleet/$owner-$1"; then echo "fleet/$owner-$1"; return; fi
+  br=$(git -C "$FLEET_ROOT" for-each-ref --format='%(refname:short)' "refs/heads/fleet/*-$1")
+  n=$(printf '%s' "$br" | grep -c . || true)
+  [ "$n" = 1 ] && echo "$br" || echo "${n}?"   # 0? = no branch, 2? = ambiguous
+}
+
+cmd_landable() {  # approved and flagged beans: the branch fleet-land-bean takes, and whether it still applies to main
+  local f b st br new merge note subj
+  printf '%-12s %-8s %-36s %-3s %-8s %s\n' BEAN STATE BRANCH NEW MERGE SUBJECT
+  for f in "$FLEET_STATE"/approved/* "$FLEET_STATE"/needs-land/*; do
+    [ -e "$f" ] || continue
+    b=${f##*/}; case $b in .*) continue ;; esac
+    st=approved; [ "${f%/*}" = "$FLEET_STATE/needs-land" ] && st=flagged
+    [ $st = approved ] && [ -e "$FLEET_STATE/needs-land/$b" ] && continue   # listed once, as flagged
+    br=$(bean_branch "$b"); note=""
+    case $br in
+      0\?) printf '%-12s %-8s %-36s\n' "$b" "$st" "(no fleet branch)"; continue ;;
+      *\?) printf '%-12s %-8s %-36s\n' "$b" "$st" "(${br%\?} branches: set state/owner/$b)"; continue ;;
+    esac
+    # NEW: commits whose change is not on main yet (patch-id, so a cherry-picked or squashed land counts as on main)
+    new=$(git -C "$FLEET_ROOT" cherry main "$br" | grep -c '^+' || true)
+    merge=$(git -C "$FLEET_ROOT" merge-tree --write-tree main "$br" >/dev/null 2>&1 && echo clean || echo CONFLICT)
+    if [ "$new" = 0 ]; then note="(already on main)"
+    elif [ -z "$(git -C "$FLEET_ROOT" diff --name-only "main...$br" -- . ':(exclude).beans')" ]; then note="(bean file only)"; fi
+    subj=$(git -C "$FLEET_ROOT" log --no-merges --format=%s "main..$br" | grep -v '^chore(beans)' | tail -1 || true)
+    printf '%-12s %-8s %-36s %-3s %-8s %s\n' "$b" "$st" "${br#fleet/}" "$new" "$merge" "${note:-$subj}"
+    [ $st = flagged ] && printf '%-12s ↳ %s\n' "" "$(head -1 "$f")"
+  done
+  echo "MERGE is each branch against main alone: two clean branches can still conflict once one lands."
+}
+
 sync_worktree() {  # <name> — bring an idle agent's worktree up to main without touching the user's tree
   local wt; wt=$(herdr agent get "$1" | jq -r '.result.agent.cwd'); wt=$(git -C "$wt" rev-parse --show-toplevel)
   local st; st=$(state_of "$1"); case $st in idle|done) ;; *) echo "$1: skipped (state=$st)"; return 0;; esac
@@ -1030,6 +1071,7 @@ case "${1:-}" in
   rules)   cmd_rules ;;
   rm)      cmd_rm "$2" ;;
   land)    cmd_land "$2" ;;
+  landable) cmd_landable ;;
   sync)    cmd_sync "${2:-}" ;;
   task)    cmd_task "$2" "$3" ;;
   send)
@@ -1045,5 +1087,5 @@ case "${1:-}" in
   cancel)  herdr agent send-keys "$2" esc | jq -r '"\($2): \(.result.type // .error.code)"' --arg 2 "$2" ;;
   blocked) agents | jq -r 'select(.agent_status == "blocked") | (.name // .pane_id)' | while read -r a; do
              echo "===== $a"; herdr agent read "$a" --source visible --lines 25; done ;;
-  *) sed -n '2,21p' "$0"; exit 2 ;;
+  *) sed -n '2,22p' "$0"; exit 2 ;;
 esac
