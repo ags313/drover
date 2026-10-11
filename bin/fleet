@@ -494,7 +494,16 @@ start_agent() {  # name kind pane — a fresh shell needs a moment before it is 
   # the seat shell (and so the agent and everything it runs) gets a per-user process ceiling and a two-worker jest
   # default BEFORE the agent starts. ulimit only lowers; FLEET_NPROC_LIMIT=0 skips it.
   if [ "${FLEET_NPROC_LIMIT:-1500}" != 0 ]; then
-    herdr pane run "$3" "export JEST_MAX_WORKERS=\${JEST_MAX_WORKERS:-2}; ulimit -u ${FLEET_NPROC_LIMIT:-1500}; clear" >/dev/null 2>&1; sleep 1
+    local cap="ulimit -u ${FLEET_NPROC_LIMIT:-1500}"
+    # Linux counts every thread the user owns against ulimit -u, so the seats would starve each other (see
+    # fleet-slot). There the pane shell re-execs itself, same pid, into a scope whose TasksMax caps this seat's
+    # tree only; without a usable systemd user manager there is no ceiling.
+    if [ "$(uname -s)" = Linux ]; then
+      cap=":"
+      systemd-run --user --scope --quiet true >/dev/null 2>&1 &&
+        cap="exec systemd-run --user --scope --quiet -p TasksMax=${FLEET_NPROC_LIMIT:-1500} -- \"\$SHELL\""
+    fi
+    herdr pane run "$3" "export JEST_MAX_WORKERS=\${JEST_MAX_WORKERS:-2}; clear; $cap" >/dev/null 2>&1; sleep 1
   fi
   for _ in $(seq 1 30); do
     # shellcheck disable=SC2086

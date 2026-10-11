@@ -21,9 +21,12 @@ same pool wait for each other. 0 disables the limiter.
 A child started by `run` gets FLEET_SLOT_HELD=<slot>; a nested `fleet-slot run` sees it and runs directly,
 so a gate that calls a script that also takes a slot never deadlocks waiting on itself.
 
-Every child under `run` also gets a per-user process ceiling (RLIMIT_NPROC, set in the child before exec) and a
-two-worker jest default (JEST_MAX_WORKERS=2 unless already set), on all three call paths. The ceiling is
-FLEET_NPROC_LIMIT (default 1500; 0 disables) and only ever LOWERS the limit: cap = min(existing hard limit, value).
+Every child under `run` also gets a process ceiling and a two-worker jest default (JEST_MAX_WORKERS=2 unless
+already set), on all three call paths. The ceiling is FLEET_NPROC_LIMIT (default 1500; 0 disables). On macOS it is a
+per-user RLIMIT_NPROC set in the child before exec, and only ever LOWERS the limit: cap = min(existing hard limit,
+value). On Linux RLIMIT_NPROC counts every THREAD the user owns, desktop and all other seats included, so 25 node
+seats pass 1500 and every fork everywhere fails; there the ceiling is a cgroup TasksMax on the child's own tree
+(`systemd-run --user --scope`), and without a usable systemd user manager there is none.
 A runaway fork then fails with EAGAIN instead of taking the machine down (see docs/LESSONS.md, "Never run jest
 via node -e with more than one worker").
 """
@@ -31,6 +34,7 @@ import fcntl
 import json
 import os
 import resource
+import shutil
 import subprocess
 import sys
 import time
@@ -60,9 +64,24 @@ def _cap_nproc():
     resource.setrlimit(resource.RLIMIT_NPROC, (cap, cap))
 
 
+def _scope_prefix():
+    """Linux: run the child in its own scope with TasksMax. systemd-run --scope execs the command in place, so
+    the exit code, environment, cwd and the inherited slot lock fd all carry through."""
+    if NPROC <= 0 or not shutil.which('systemd-run'):
+        return []
+    try:
+        ok = subprocess.run(['systemd-run', '--user', '--scope', '--quiet', 'true'],
+                            capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        ok = False
+    return ['systemd-run', '--user', '--scope', '--quiet', '-p', f'TasksMax={NPROC}', '--'] if ok else []
+
+
 def guarded_call(cmd, env=None, **kw):
     env = dict(os.environ if env is None else env)
     env.setdefault('JEST_MAX_WORKERS', '2')
+    if sys.platform.startswith('linux'):
+        return subprocess.call(_scope_prefix() + list(cmd), env=env, **kw)
     return subprocess.call(cmd, env=env, preexec_fn=_cap_nproc, **kw)
 
 

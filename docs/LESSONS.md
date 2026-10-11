@@ -1216,6 +1216,8 @@ gets `ulimit -u` and `JEST_MAX_WORKERS=2` before the agent starts (`fleet`, `FLE
 disables), and `fleet-slot run` applies the same ceiling to each child via RLIMIT_NPROC, lower-only; (3) the coder
 and reviewer prompts state the rule; (4) `fleet-check-inline-jest-fanout` flags any prompt or script that pairs an
 inline `node -e` with `runCLI` and no single-worker setting, and has a `--self-test` (2 known-bad flagged, 2
-known-good passed). A per-user process ceiling turns an unbounded fork into EAGAIN for one process tree.
+known-good passed). A per-user process ceiling turns an unbounded fork into EAGAIN for one process tree. On Linux
+`ulimit -u` counts every thread the user owns, so the same ceiling there is a cgroup `TasksMax` on each seat's and
+each slot child's own tree (`systemd-run --user --scope`).
 **Metric:** node processes per user during a test run stays under the ceiling; inline-eval jest fan-outs in
 prompts/scripts = 0.
