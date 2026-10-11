@@ -479,13 +479,22 @@ bootstrap_worktree() {  # <checkout> — make a fresh checkout runnable without 
 worktree_pane() {  # <name> -> root pane of the agent's own workspace (reused if present, else opened/created)
   local name=$1 ws; ws=$(ws_by_label "$name")
   if [ -z "$ws" ]; then
-    local out
+    # The seat's worktree outlives its workspace, and by then it may be on a bean branch
+    # (fleet/<name>-<bean>): opening by fleet/<name> fails, and creating fails on the existing path.
+    # So open it by path too, before creating one.
+    local out wt="$DROVER_WORKTREES/fleet-$name"
     out=$(herdr worktree open --cwd "$FLEET_ROOT" --branch "fleet/$name" --label "$name" --no-focus 2>/dev/null) \
+      || { [ -d "$wt" ] && out=$(herdr worktree open --cwd "$FLEET_ROOT" --path "$wt" --label "$name" --no-focus 2>/dev/null); } \
       || out=$(herdr worktree create --cwd "$FLEET_ROOT" --branch "fleet/$name" --label "$name" --no-focus)
-    ws=$(jq -r .result.workspace.workspace_id <<<"$out")
+    ws=$(jq -r '.result.workspace.workspace_id // empty' <<<"$out" 2>/dev/null)
   fi
-  local p; p=$(herdr pane list --workspace "$ws" | jq -c '.result.panes[0] | {pane_id, cwd}')
-  bootstrap_worktree "$(git -C "$(jq -r .cwd <<<"$p")" rev-parse --show-toplevel)"
+  # No workspace: stop here. An empty pane cwd made `git -C ""` resolve the CALLER's checkout,
+  # which then got bootstrapped (WIP patch, .env, marker) in place of the seat's worktree.
+  [ -n "$ws" ] || return 1
+  local p cwd; p=$(herdr pane list --workspace "$ws" | jq -c '.result.panes[0] // empty | {pane_id, cwd}')
+  cwd=$(jq -r '.cwd // empty' <<<"$p")
+  [ -n "$cwd" ] || return 1
+  bootstrap_worktree "$(git -C "$cwd" rev-parse --show-toplevel)"
   jq -r .pane_id <<<"$p"
 }
 
@@ -532,7 +541,7 @@ cmd_up() {
     fi
     local pane
     if [ "$FLEET_WORKTREES" = 1 ]; then
-      pane=$(worktree_pane "$name")
+      pane=$(worktree_pane "$name") || { echo "$name: FAILED (no workspace for worktree fleet-$name) — check: git -C $FLEET_ROOT worktree list"; continue; }
     else
       [ -n "$ws" ] || ws=$(fleet_workspace)
       pane=$(tab_pane "$ws" "$name")
