@@ -22,7 +22,7 @@ A seat that is `working` is never interrupted; it is retried on the next run.
   fleet-yolo seat --force        # restart a named seat even if already yolo (e.g. to move it to a new model)
   fleet-yolo seat --model=NAME   # relaunch with this model instead of whatever it was already running
 """
-import json, os, re, subprocess, sys, time
+import json, os, re, shlex, subprocess, sys, time
 
 DRY = '--dry-run' in sys.argv
 QUIET = '--quiet' in sys.argv
@@ -64,10 +64,14 @@ def log(msg):
 def drover_env():
     """The same config every bash script sees: source drover-env (next to this file) and read it back."""
     env = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'drover-env')
-    out = subprocess.run(['bash', '-c', '. "$0"; printf "%s\\0%s\\0%s\\0%s\\0%s\\0%s" "${FLEET:-$DROVER_ROSTER}" '
-                          '"$FLEET_STATE" "$FLEET_TASKS" "$DROVER_LEAD_SEATS" "$DROVER_WORKTREES" "$DROVER_SEAT_MODELS"', env],
+    out = subprocess.run(['bash', '-c', '. "$0"; printf "%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s" "${FLEET:-$DROVER_ROSTER}" '
+                          '"$FLEET_STATE" "$FLEET_TASKS" "$DROVER_LEAD_SEATS" "$DROVER_WORKTREES" "$DROVER_SEAT_MODELS" '
+                          '"${DROVER_PROJECT:-}"', env],
                          capture_output=True, text=True, check=True).stdout.split('\0')
-    return dict(zip(('roster', 'state', 'tasks', 'leads', 'worktrees', 'seat_models'), out))
+    cfg = dict(zip(('roster', 'state', 'tasks', 'leads', 'worktrees', 'seat_models', 'project'), out))
+    if cfg.get('project'):   # found from the repository by drover-env: relaunches must carry it (launch_in_shell)
+        os.environ['DROVER_PROJECT'] = cfg['project']
+    return cfg
 
 
 CFG = drover_env()
@@ -136,6 +140,9 @@ def launch_in_shell(pane, kind, launch, seat=None):
     # rules require it). Prefix every relaunch with the pane's own identity, not whatever the shell has.
     ws = pane.split(':')[0]
     launch = f'HERDR_ENV=1 HERDR_PANE_ID={pane} HERDR_WORKSPACE_ID={ws} ' + launch
+    # ...and with the seat's project, so a restored pane's agent still announces into its own project.
+    if os.environ.get('DROVER_PROJECT'):
+        launch = f'DROVER_PROJECT={shlex.quote(os.environ["DROVER_PROJECT"])} ' + launch
     # Relaunch INSIDE the seat's own worktree when it has one (LESSONS.md "make yolo the per-worktree
     # default"). herdr restores a pane in whatever cwd it had; after a restart a seat can come back in
     # $HOME instead, and then do its next git operation in the SHARED checkout instead of its own tree.

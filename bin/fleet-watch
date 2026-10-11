@@ -84,7 +84,7 @@ if [ "$FLEET_DRY_RUN" = 1 ]; then
   esac
 fi
 
-: "${REPO:?set DROVER_REPO (env or ~/.config/drover/config) to your project checkout}"
+: "${REPO:?set DROVER_REPO (env or ~/.config/drover/config) to your project checkout, or pick a project: DROVER_PROJECT=NAME}"
 mkdir -p "$Q" "$INBOX" "$(dirname "$LOG")" "$TASKS" "$STATE"
 log(){ printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" | tee -a "$LOG"; }
 # Hard wall-clock cap for helper scripts called inside the tick: one hung `git|sort` pipeline in a

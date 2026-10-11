@@ -3,6 +3,32 @@
 # One config file, plain shell. Write values as ${VAR:-value} so the environment wins:
 #   DROVER_REPO="${DROVER_REPO:-$HOME/src/myproject}"
 # Every path below can be overridden the same way.
+#
+# Several projects (install.sh --project NAME): each has its own config, ~/.config/drover/projects/NAME/config,
+# and its own state, ~/.local/share/drover/projects/NAME; DROVER_PROJECT=NAME picks one. The units and seat
+# panes have it set. Without it, a script run inside a project's checkout or one of its worktrees finds the
+# project by its repository, so a seat's fleet-done always announces into its own project's inbox, never
+# into another's. Without projects, nothing below changes: one config, one state dir.
+DROVER_PROJECTS_DIR="${DROVER_PROJECTS_DIR:-$HOME/.config/drover/projects}"
+if [ -z "${DROVER_PROJECT:-}" ] && [ -z "${DROVER_CONFIG:-}" ] && [ -d "$DROVER_PROJECTS_DIR" ] &&
+   _drover_git=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+   _drover_git=$(cd "$_drover_git" && pwd -P); then
+  for _drover_c in "$DROVER_PROJECTS_DIR"/*/config; do
+    [ -f "$_drover_c" ] || continue
+    # shellcheck disable=SC1090
+    _drover_r=$(unset DROVER_REPO; . "$_drover_c" >/dev/null 2>&1; printf '%s' "${DROVER_REPO:-}")
+    if [ -n "$_drover_r" ] && [ "$(cd "$_drover_r/.git" 2>/dev/null && pwd -P)" = "$_drover_git" ]; then
+      DROVER_PROJECT=$(basename "$(dirname "$_drover_c")"); break
+    fi
+  done
+  unset _drover_git _drover_c _drover_r
+fi
+if [ -n "${DROVER_PROJECT:-}" ]; then
+  export DROVER_PROJECT   # scripts call each other: a child must not detect again, or detect differently
+  DROVER_CONFIG="${DROVER_CONFIG:-$DROVER_PROJECTS_DIR/$DROVER_PROJECT/config}"
+  DROVER_HOME="${DROVER_HOME:-$HOME/.local/share/drover/projects/$DROVER_PROJECT}"
+  [ -f "$DROVER_CONFIG" ] || echo "drover: project $DROVER_PROJECT has no config at $DROVER_CONFIG" >&2
+fi
 DROVER_CONFIG="${DROVER_CONFIG:-$HOME/.config/drover/config}"
 # shellcheck disable=SC1090
 [ -f "$DROVER_CONFIG" ] && . "$DROVER_CONFIG"

@@ -493,7 +493,12 @@ start_agent() {  # name kind pane — a fresh shell needs a moment before it is 
   local err args; err=$(mktemp); args=$(agent_args "$2")
   # the seat shell (and so the agent and everything it runs) gets a per-user process ceiling and a two-worker jest
   # default BEFORE the agent starts. ulimit only lowers; FLEET_NPROC_LIMIT=0 skips it.
-  if [ "${FLEET_NPROC_LIMIT:-1500}" != 0 ]; then
+  # In a multi-project setup the seat's shell carries its project, so whatever the agent runs (fleet-done,
+  # fleet-claim, fleet-slot) reads this project's config and state even from outside the repository.
+  local proj=""; [ -z "${DROVER_PROJECT:-}" ] || proj="export DROVER_PROJECT=$(printf '%q' "$DROVER_PROJECT"); "
+  if [ "${FLEET_NPROC_LIMIT:-1500}" = 0 ]; then
+    [ -z "$proj" ] || { herdr pane run "$3" "${proj}clear" >/dev/null 2>&1; sleep 1; }
+  else
     local cap="ulimit -u ${FLEET_NPROC_LIMIT:-1500}"
     # Linux counts every thread the user owns against ulimit -u, so the seats would starve each other (see
     # fleet-slot). There the pane shell re-execs itself, same pid, into a scope whose TasksMax caps this seat's
@@ -503,7 +508,7 @@ start_agent() {  # name kind pane — a fresh shell needs a moment before it is 
       systemd-run --user --scope --quiet true >/dev/null 2>&1 &&
         cap="exec systemd-run --user --scope --quiet -p TasksMax=${FLEET_NPROC_LIMIT:-1500} -- \"\$SHELL\""
     fi
-    herdr pane run "$3" "export JEST_MAX_WORKERS=\${JEST_MAX_WORKERS:-2}; clear; $cap" >/dev/null 2>&1; sleep 1
+    herdr pane run "$3" "${proj}export JEST_MAX_WORKERS=\${JEST_MAX_WORKERS:-2}; clear; $cap" >/dev/null 2>&1; sleep 1
   fi
   for _ in $(seq 1 30); do
     # shellcheck disable=SC2086
@@ -958,7 +963,7 @@ if [ "$FLEET_HELP" = 1 ]; then cmd_help "${1:-}"; exit 0; fi
 
 case "${1:-}" in
   ""|status|read|wait|keys|cancel|blocked|models|usage|stale|finish|note) ;;
-  *) : "${FLEET_ROOT:?set DROVER_REPO (env or ~/.config/drover/config) to your project checkout}" ;;
+  *) : "${FLEET_ROOT:?set DROVER_REPO (env or ~/.config/drover/config) to your project checkout, or pick a project: DROVER_PROJECT=NAME}" ;;
 esac
 
 if [ "$FLEET_DRY_RUN" = 1 ]; then
