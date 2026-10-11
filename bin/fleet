@@ -838,9 +838,9 @@ cmd_task() {
 
 cmd_stale() {
   # Processes the agents leave behind. A pane's live processes are the descendants of its shell
-  # (herdr pane process-info). ORPHAN: agent tooling reparented to launchd (ppid 1), its pane is
-  # gone. LEFTOVER: a dev/test process still running under a pane whose agent is idle/done/blocked,
-  # older than FLEET_STALE_MIN. HEAVY: anything under a pane above FLEET_HEAVY_MB (report only).
+  # (herdr pane process-info). ORPHAN: agent tooling reparented to init (ppid 1: launchd, systemd) or to
+  # `systemd --user` (a subreaper on Linux), its pane gone. LEFTOVER: a dev/test process still running under
+  # a pane whose agent is idle/done/blocked, older than FLEET_STALE_MIN. HEAVY: anything under a pane above FLEET_HEAVY_MB (report only).
   # 2026-09-02: 168 node procs (47 GB) + 16 tessl MCP servers (2 GB each) put a 128 GB box at
   # 183 MB free every day for a week; the kernel watchdog eventually panicked it.
   local mode=${1:-} shells="" ps_out live
@@ -877,6 +877,8 @@ DEV  = re.compile(r"\bjest\b|playwright|\bvite\b|\btsx\b|next dev|npm (run|test|
 TOOL = re.compile(r"\.herdr/worktrees/|\.omo/|" + MCP.pattern + "|" + DEV.pattern)
 rows, seen, kill = [], set(), []
 per_pane = {}
+# Where an orphan lands: pid 1, or the per-user systemd manager, which Linux makes a subreaper.
+REAPERS = {1} | {p for p, (_, _, _, args) in procs.items() if re.search(r"(^|/)systemd --user\b", args)}
 # mcp-hub (launchd) owns the shared MCP children on purpose: never an orphan, never a leftover
 for p, (ppid, et, rss, args) in procs.items():
     if "mcp-hub/hub.mjs" in args: seen.update([p] + desc(p))
@@ -891,7 +893,7 @@ for pane, name, state, sp in shells:
     per_pane[pane] = ", ".join(s for s in ((f"{stale} stale" if stale else ""), (f"{heavy} heavy" if heavy else "")) if s)
 for p, (ppid, et, rss, args) in procs.items():
     # age gate: codex double-forks tool commands, so a fresh ppid-1 process may be a live job
-    if ppid == 1 and p not in seen and TOOL.search(args) and minutes(et) > STALE_MIN:
+    if ppid in REAPERS and p not in seen and TOOL.search(args) and minutes(et) > STALE_MIN:
         for q in [p] + desc(p):
             rows.append(("orphan", "-", q, minutes(procs[q][1]), procs[q][2], procs[q][3])); kill.append(q)
 orphans = sum(1 for r in rows if r[0] == "orphan")

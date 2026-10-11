@@ -42,11 +42,13 @@ for x in json.load(sys.stdin)["result"]["agents"]:
   if x.get("agent")!="opencode": continue
   s=(x.get("agent_session") or {}).get("value","")
   print("\t".join([x.get("pane_id",""), x.get("name") or "-", s, x.get("cwd","")]))' > "$OUT/panes-before-compact.tsv"
-pids=$(pgrep -x opencode | tr '\n' ' ')
+# By command line, not process name: under Nix the process is .opencode-wrapped (`pgrep -x opencode` misses it).
+OC='^([^ ]*/)?\.?opencode(-wrapped)*( |$)'
+pids=$(pgrep -f "$OC" | tr '\n' ' ')
 say "stopping opencode: $pids (panes snapshotted: $(wc -l < "$OUT/panes-before-compact.tsv"))"
 [ -n "$pids" ] && kill -TERM $pids
-for i in $(seq 1 60); do pgrep -x opencode >/dev/null || break; sleep 1; done
-pgrep -x opencode >/dev/null && { say "opencode still running after 60s — aborting, DB untouched"; exit 1; }
+for i in $(seq 1 60); do pgrep -f "$OC" >/dev/null || break; sleep 1; done
+pgrep -f "$OC" >/dev/null && { say "opencode still running after 60s — aborting, DB untouched"; exit 1; }
 holders=$(lsof "$DB" 2>/dev/null | awk 'NR>1{print $1"("$2")"}' | sort -u | tr '\n' ' ')
 [ -z "$holders" ] || { say "DB still open by: $holders — aborting, DB untouched"; exit 1; }
 

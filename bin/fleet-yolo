@@ -38,9 +38,12 @@ FLAG = {  # must match agent_args() in fleet
     'grok': ['--always-approve'],
     'agy': ['--dangerously-skip-permissions'],
 }
+# Nix wraps a program as bin/NAME exec'ing bin/.NAME-wrapped; a binary wrapper (claude, codex on NixOS) does not
+# keep argv[0], so the process shows up as .../bin/.claude-wrapped. Each name matches in either form.
+W = r'(-wrapped)*( |$)'
 BIN = {  # top-level agent process for each harness
-    'claude': r'(^|/)claude( |$)', 'codex': r'/bin/codex( |$)', 'opencode': r'(^|/)opencode( |$)',
-    'cursor': r'cursor-agent( |$)', 'grok': r'(^|/)grok( |$)', 'agy': r'(^|/)agy( |$)',
+    'claude': r'(^|/)\.?claude' + W, 'codex': r'/bin/\.?codex' + W, 'opencode': r'(^|/)\.?opencode' + W,
+    'cursor': r'\.?cursor-agent' + W, 'grok': r'(^|/)\.?grok' + W, 'agy': r'(^|/)\.?agy' + W,
 }
 EXE = {'claude': 'claude', 'codex': 'codex', 'opencode': 'opencode', 'cursor': 'cursor-agent', 'grok': 'grok', 'agy': 'agy'}
 RESUME = {  # how each harness names the session it resumed; re-emitted verbatim
@@ -88,7 +91,7 @@ def pane_processes():
     res = {}
     for line in ps:
         parts = line.split(None, 2)
-        if len(parts) < 3 or parts[1] == '??':
+        if len(parts) < 3 or parts[1] in ('?', '??'):   # no tty: '??' on macOS, '?' on Linux
             continue
         pid, _, cmd = parts
         cmd = cmd.strip()
@@ -99,7 +102,10 @@ def pane_processes():
         kind = next((k for k, p in BIN.items() if re.search(p, cmd) and 'Claude.app' not in cmd and not is_mcp_server), None)
         if not kind:
             continue
-        env = sh('ps', 'eww', '-o', 'command=', '-p', pid).stdout
+        try:   # Linux: the exact environment, NUL-separated
+            env = open(f'/proc/{pid}/environ', 'rb').read().decode(errors='replace').replace('\0', ' ')
+        except OSError:
+            env = sh('ps', 'eww', '-o', 'command=', '-p', pid).stdout
         m = re.search(r'\bHERDR_PANE_ID=(\S+)', env)
         if m:
             res.setdefault(m.group(1), []).append((pid, kind, cmd))
