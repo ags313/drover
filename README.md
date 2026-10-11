@@ -4,10 +4,10 @@ drover turns [herdr](https://herdr.dev) into a self-running team of coding agent
 (tasks), coders work in their own git worktrees, a reviewer on a *different* harness reviews, and a watcher
 loop moves work between them without the lead in the path.
 
-It is a set of bash scripts, a launchd job, and an agent skill. It was extracted from one person's fleet —
-10 to 25 agents across Claude Code, Codex, opencode, Grok, Cursor and Antigravity, working on one production
-codebase — and it carries that fleet's scar tissue: almost every guard in it has a dated comment saying what
-broke before it existed.
+It is a set of bash scripts, a launchd job (or systemd user units), and an agent skill. It was extracted from
+one person's fleet — 10 to 25 agents across Claude Code, Codex, opencode, Grok, Cursor and Antigravity, working
+on one production codebase — and it carries that fleet's scar tissue: almost every guard in it has a dated
+comment saying what broke before it existed.
 
 ## Why
 
@@ -160,7 +160,7 @@ one-word tag (ROUTED, DISPATCH, FOLLOWUP, PARTIAL, SKIP, STALE, BUDGET, APPROVED
 | Yolo guard | herdr resumes agents after a reboot without their approval-bypass flags; idle seats are relaunched with them, resuming their own session. A `working` seat is never interrupted. | `fleet-yolo` |
 | Fail-loud dispatch | Unknown agent, bean not on main, or unwritable brief: exit 2, one line, nothing written. A failed dispatch leaves the seat free and requeues the bean. | `fleet`, `fleet-watch` |
 | Serial one-line prompts | Prompts are a one-line pointer to a brief file, sent serially with `--wait`: parallel sends lost 6 of 6 prompts, and long multi-line prompts lost 3 of 4. | `fleet assign/review` |
-| Stale processes | Orphaned tool processes (pane gone), dev/test leftovers under idle agents, and heavy processes, reported into herdr's sidebar every 5 min. | `fleet stale` (launchd) |
+| Stale processes | Orphaned tool processes (pane gone), dev/test leftovers under idle agents, and heavy processes, reported into herdr's sidebar every 5 min. | `fleet stale` (launchd / systemd timer) |
 | Backup lead | A zero-token watchdog prompts a backup-lead seat once when the primary lead's heartbeat is 45 min old. | `lead-watchdog` (optional) |
 
 ## Optional: TypeSafe detectors
@@ -186,8 +186,11 @@ titles are sent. Decide whether that is acceptable before adding the key.
 
 ## Requirements
 
-- macOS (launchd, `stat -f`, APFS `cp -c` clones for fast worktree bootstrap)
-- bash, python3, jq, git 2.40+
+- macOS (launchd) or Linux with systemd, including NixOS. BSD and GNU `stat`/`date`/`df`/`cp` are both handled
+  (`bin/drover-env`). Worktree bootstrap clones dependency dirs copy-on-write on APFS, btrfs, XFS and bcachefs;
+  on ext4 it is a full copy.
+- bash, python3, jq, git 2.40+, perl; on Linux also procps and lsof (fleet-sweep and oc-compact refuse to act
+  without lsof), and libnotify for desktop alerts. [`shell.nix`](shell.nix) lists every binary drover runs.
 - [herdr](https://herdr.dev) with the harness CLIs you use (`claude`, `codex`, `opencode`, `cursor-agent`, `grok`, `agy`)
 - [beans](https://github.com/hmans/beans) — the task board. Beans must be committed on `main` to be dispatched.
 - Optional: `opencode` (for the spend cap), a TypeSafe API key, `sqlite3` (for `ops/oc-compact.sh`)
@@ -196,7 +199,7 @@ titles are sent. Decide whether that is acceptable before adding the key.
 
 ```bash
 git clone <this repo> ~/src/drover && cd ~/src/drover
-./install.sh --dry-run          # shows every symlink, dir, file and plist it would create
+./install.sh --dry-run          # shows every symlink, dir, file and service unit it would create
 ./install.sh                    # symlinks bin/* into ~/.local/bin; never overwrites a file it did not create
 $EDITOR ~/.config/drover/config # set DROVER_REPO, DROVER_ROSTER, DROVER_BUILD, DROVER_TEST
 
@@ -207,9 +210,18 @@ fleet status
 
 fleet assign <bean>             # hand-dispatch one bean to the least-loaded idle coder, or:
 fleet-watch once                # one tick by hand; tops the queue up from beans --ready
-./install.sh --load             # let launchd run fleet-watch, fleet stale, and the hourly standup
+./install.sh --load             # let launchd / systemd --user run fleet-watch, fleet stale, the hourly standup
 tail -f ~/.local/share/drover/watch/watch.log
 ```
+
+On Linux the units go to `~/.config/systemd/user` as `drover-*.service` / `.timer`, with the PATH the installer
+ran with, minus `/nix/store` entries. They stop at logout unless you `loginctl enable-linger $USER`. Restart the watcher with
+`systemctl --user restart drover-fleet-watch`.
+
+With Nix: `nix-shell` gives every binary drover runs, listed in `shell.nix`: the tools above, herdr, beans and
+the default roster's harness CLIs (claude-code, codex, opencode; unfree allowed for that shell only). The units
+and herdr's panes run outside that shell, so on NixOS install the same list in your profile; `install.sh` names
+any the units' PATH lacks. Check a change with `nix-shell --run 'bash eval/eval-checkers.sh'`.
 
 To land: follow [`docs/RUNBOOK.md`](docs/RUNBOOK.md). To stop new work while everything in flight finishes:
 `touch ~/.local/share/drover/watch/state/finish-first`.
@@ -257,7 +269,7 @@ scripts call each other by absolute path, so only your interactive shell is affe
 | `fleet-mignum <bean>` | Reserve the next migration number under a lock, across main, every fleet branch, and every earlier reservation this session — never pick one by looking. |
 | `fleet-heal-drift` | One-off repair for a `.beans` board that drifted from what a batch of lands actually did; backs up before writing. |
 | `fleet-alert` | `send`, `check` (tick-stall, low disk, an optional MCP-footprint leak guard), `heartbeat` (for a periodic job). Used by the background land/push loop so a self-pause still wakes someone. |
-| `graphify-nightly` | No-op unless `graphify` is on PATH; else rebuilds the repo's knowledge graph (see `docs/LESSONS.md`, "Finding code"). Wired to `launchd/dev.drover.graphify-nightly.plist.in`. |
+| `graphify-nightly` | No-op unless `graphify` is on PATH; else rebuilds the repo's knowledge graph (see `docs/LESSONS.md`, "Finding code"). Wired to `launchd/dev.drover.graphify-nightly.plist.in` and `systemd/drover-graphify-nightly.timer.in`. |
 
 ## Configuration
 
@@ -312,7 +324,8 @@ subset is [`skills/fleet-peers/SKILL.md`](skills/fleet-peers/SKILL.md).
 
 ## Limitations
 
-- **macOS only.** launchd, BSD `stat`/`date`/`df`, and APFS clones are assumed throughout.
+- **macOS and Linux (systemd).** Developed on macOS; the Linux port is tested on NixOS. Other init systems
+  get no service units: run `fleet-watch run` under your own supervisor.
 - **Built for one person's fleet.** Roles are inferred from seat names, harness quirks (dialog texts, credit
   banners, resume flags) are the ones that fleet met, and the prompts assume the target repo has its own agent
   rules (CLAUDE.md / AGENTS.md). Expect to read the scripts.
