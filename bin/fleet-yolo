@@ -42,7 +42,7 @@ FLAG = {  # must match agent_args() in fleet
 # keep argv[0], so the process shows up as .../bin/.claude-wrapped. Each name matches in either form.
 W = r'(-wrapped)*( |$)'
 BIN = {  # top-level agent process for each harness
-    'claude': r'(^|/)\.?claude' + W, 'codex': r'/bin/\.?codex' + W, 'opencode': r'(^|/)\.?opencode' + W,
+    'claude': r'(^|/)\.?claude' + W, 'codex': r'(^|/)\.?codex' + W, 'opencode': r'(^|/)\.?opencode' + W,
     'cursor': r'\.?cursor-agent' + W, 'grok': r'(^|/)\.?grok' + W, 'agy': r'(^|/)\.?agy' + W,
 }
 EXE = {'claude': 'claude', 'codex': 'codex', 'opencode': 'opencode', 'cursor': 'cursor-agent', 'grok': 'grok', 'agy': 'agy'}
