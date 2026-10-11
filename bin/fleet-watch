@@ -806,7 +806,9 @@ route_land_conflicts(){
 # Override: FLEET_MIN_FREE_GB (default 16), FLEET_MAX_PROCS (default 1500).
 load_ok(){ local free procs
   free=$(drover_free_mem_gb)
-  procs=$(ps -A -o pid= | wc -l | tr -d ' ')
+  # Linux lists kernel threads too (kthreadd, pid 2, and its children): 416 of 482 on an idle 32-core box, and
+  # more per core, so on a big machine they alone neared the limit. Count user-space processes only.
+  procs=$(ps -A -o pid=,ppid= | awk '$1 != 2 && $2 != 2' | wc -l | tr -d ' ')
   if [ "${free:-0}" -lt "${FLEET_MIN_FREE_GB:-16}" ] || [ "${procs:-0}" -gt "${FLEET_MAX_PROCS:-1500}" ]; then
     log "LOAD-GUARD: not starting heavy work (free ${free}GB < ${FLEET_MIN_FREE_GB:-16} or procs ${procs} > ${FLEET_MAX_PROCS:-1500})"; return 1; fi; return 0; }
 # Exponential backoff between failed gate passes: $STATE/push-backoff = "<fails> <not-before-epoch>".
