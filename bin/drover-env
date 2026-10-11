@@ -47,6 +47,7 @@ DROVER_BEAN_RE="${DROVER_BEAN_RE:-${DROVER_BEAN_PREFIX}[a-z0-9]{4}}"
 # nothing usable and every age computed from it became $(( now - )), a syntax error.
 #   drover_mtime FILE...          modification time, epoch seconds
 #   drover_size FILE              size in bytes
+#   drover_free_gb PATH           free GiB on PATH's filesystem (`df -g` is BSD-only; -P -k is POSIX)
 #   drover_date_parse FMT STR     STR (laid out as strftime FMT) -> epoch seconds; fields STR lacks come from now.
 #                                 GNU date ignores FMT and parses STR on its own; every FMT drover uses is one it reads.
 if stat -c %Y / >/dev/null 2>&1; then
@@ -61,3 +62,4 @@ if date -d @0 >/dev/null 2>&1; then
 else
   drover_date_parse(){ date -j -f "$1" "$2" +%s; }
 fi
+drover_free_gb(){ df -P -k "$1" | awk 'NR==2{print int($4/1048576)}'; }

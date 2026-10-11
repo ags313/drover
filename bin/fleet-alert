@@ -60,7 +60,7 @@ case "${1:-}" in
       fi
     fi
     # Disk: at near-full, every git/IO call crawls and the tick hangs — warn well before that.
-    free_gb=$(df -g /System/Volumes/Data 2>/dev/null | awk 'NR==2{print $4}')
+    free_gb=$(drover_free_gb "$HOME" 2>/dev/null)   # on macOS $HOME is on the Data volume
     if [ -n "$free_gb" ] && [ "$free_gb" -lt "${FLEET_DISK_MIN_GB:-25}" ]; then
       send disk-low "Disk low: ${free_gb} GB free" \
         "worktrees and agent scratchpads fill it — run fleet-sweep (or du -sh $DROVER_HOME ${DROVER_WORKTREES:-})"

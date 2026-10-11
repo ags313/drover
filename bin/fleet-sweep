@@ -7,12 +7,13 @@
 set -euo pipefail
 # shellcheck source=drover-env
 . "$(dirname "$0")/drover-env"
-# Claude Code keeps per-session scratchpads under /private/tmp/claude-<uid>/.../scratchpad.
-SCRATCH_ROOT="${DROVER_SCRATCH_ROOT:-/private/tmp/claude-$(id -u)}"
+# Claude Code keeps per-session scratchpads under /tmp/claude-<uid>/.../scratchpad (/private/tmp on macOS,
+# which /tmp points at).
+SCRATCH_ROOT="${DROVER_SCRATCH_ROOT:-/tmp/claude-$(id -u)}"
 MIN_AGE=${MIN_AGE:-120}
 DRY=${DRY:-0}
 now=$(date +%s); freed=0
-before=$(df -g / | awk 'NR==2{print $4}')
+before=$(drover_free_gb "$HOME")
 # Opt-in: this deletes directories inside OTHER Claude Code sessions' scratchpads. Enable it only on a machine
 # where every session is a fleet seat (DROVER_SWEEP_SCRATCHPADS=1 in ~/.config/drover/config).
 [ "${DROVER_SWEEP_SCRATCHPADS:-0}" = 1 ] || SCRATCH_ROOT=/nonexistent
@@ -39,11 +40,13 @@ while read -r wt; do
   age=$(( (now - $(drover_mtime "$wt")) / 60 )); [ "$age" -ge "${WT_MIN_AGE:-720}" ] || continue
   [ -z "$(git -C "$wt" status --porcelain 2>/dev/null | head -1)" ] || continue
   [ -z "$(git -C "$wt" log --oneline -1 HEAD --not --branches --remotes 2>/dev/null)" ] || continue
+  # Without lsof there is no way to tell, and an empty answer would read as "no process": keep the worktree.
+  command -v lsof >/dev/null || continue
   [ -z "$(lsof +d "$wt" 2>/dev/null | awk 'NR>1' | head -1)" ] || continue
   sz=$(du -sm "$wt" 2>/dev/null | cut -f1)
   if [ "$DRY" = 1 ]; then echo "would remove worktree ${sz}MB ${age}m $wt"
   else git -C "$ROOT" worktree remove "$wt" >/dev/null 2>&1 && echo "removed worktree ${sz}MB ${age}m $wt" && freed=$((freed + ${sz:-0})); fi
 done < <(git -C "$ROOT" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep -F "$SCRATCH_WT/" || true)
 git -C "$ROOT" worktree prune 2>/dev/null
-after=$(df -g / | awk 'NR==2{print $4}')
+after=$(drover_free_gb "$HOME")
 echo "fleet-sweep: ~${freed}MB, free ${before}Gi -> ${after}Gi (MIN_AGE=${MIN_AGE}m, DRY=${DRY})"

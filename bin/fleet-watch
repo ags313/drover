@@ -130,7 +130,7 @@ check_budget(){
   # A failed or capped inspection is "pending inspection", never "no budget problem".
   local out rc _b=$SECONDS
   set +x
-  out=$("$DROVER_BIN"/fleet-budget --capture 60 65536 /bin/bash "$DROVER_BIN"/fleet-budget); rc=$?
+  out=$("$DROVER_BIN"/fleet-budget --capture 60 65536 "$BASH" "$DROVER_BIN"/fleet-budget); rc=$?
   BROKE=""; SEAT_BLOCKED=""; BUDGET_SEATS=""
   # hard off-switch: harnesses listed in state/harness-off are never dispatched to, whatever the panes say
   for h in $(cat "$STATE/harness-off" 2>/dev/null); do BROKE="$BROKE $h"; done
