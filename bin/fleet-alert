@@ -11,8 +11,9 @@
 #   fleet-alert heartbeat        run the periodic health guards below (tick-stall, disk, MCP leaks)
 #   fleet-alert send KEY TITLE BODY   one-off alert through every channel (dedup per KEY)
 #
-# Channels: herdr toast (sound=request), a macOS notification, and a prompt into the lead's pane so the
-# lead session actually wakes (a busy Claude pane queues it as a mid-turn message).
+# Channels: herdr toast (sound=request), a desktop notification (osascript on macOS, notify-send elsewhere),
+# and a prompt into the lead's pane so the lead session actually wakes (a busy Claude pane queues it as a
+# mid-turn message).
 set -u
 # shellcheck source=drover-env
 . "$(dirname "$0")/drover-env"
@@ -28,7 +29,11 @@ send() {  # key title body
   touch "$stamp"
   if [ "$DRY" = 1 ]; then echo "ALERT[$key] $title — $body"; return 0; fi
   herdr notification show "$title" --body "$body" --sound request >/dev/null 2>&1
-  osascript -e "display notification \"${body//\"/\'}\" with title \"${title//\"/\'}\" sound name \"Basso\"" >/dev/null 2>&1
+  if command -v osascript >/dev/null; then
+    osascript -e "display notification \"${body//\"/\'}\" with title \"${title//\"/\'}\" sound name \"Basso\"" >/dev/null 2>&1
+  elif command -v notify-send >/dev/null; then   # Linux desktops (libnotify)
+    notify-send -u critical -a drover "$title" "$body" >/dev/null 2>&1
+  fi
   herdr agent prompt "$LEAD" "FLEET ALERT — $title: $body" >/dev/null 2>&1
   printf '%s ALERT %s — %s\n' "$(date +%H:%M:%S)" "$title" "$body" >> "$(dirname "$STATE")/watch.log"
 }
