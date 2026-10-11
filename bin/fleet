@@ -456,13 +456,14 @@ bootstrap_worktree() {  # <checkout> — make a fresh checkout runnable without 
   fi
   local mark; mark="$(git -C "$wt" rev-parse --absolute-git-dir)/drover-bootstrapped"   # inside .git: never committed
   [ -f "$mark" ] && return 0
-  echo "bootstrapping $wt (APFS clone of dependency dirs, local files, local skills, WIP)" >&2
+  echo "bootstrapping $wt (clone of dependency dirs, local files, local skills, WIP)" >&2
   # DROVER_CLONE_DIRS: dependency trees copied from the main checkout so a fresh worktree builds without
-  # an install. cp -c = APFS clonefile: seconds, no extra disk. DROVER_COPY_FILES: untracked files the
-  # build needs (e.g. .env) — they stay on this machine, inside the seat's own worktree.
+  # an install. drover_clone: copy-on-write where the filesystem allows (APFS, btrfs, XFS): seconds, no extra
+  # disk. DROVER_COPY_FILES: untracked files the build needs (e.g. .env) — they stay on this machine, inside
+  # the seat's own worktree.
   # shellcheck disable=SC2086
   for d in ${DROVER_CLONE_DIRS:-node_modules}; do
-    [ -d "$FLEET_ROOT/$d" ] && [ ! -e "$wt/$d" ] && cp -Rc "$FLEET_ROOT/$d" "$wt/$d"
+    [ -d "$FLEET_ROOT/$d" ] && [ ! -e "$wt/$d" ] && drover_clone "$FLEET_ROOT/$d" "$wt/$d"
   done
   # shellcheck disable=SC2086
   for f in ${DROVER_COPY_FILES:-.env}; do

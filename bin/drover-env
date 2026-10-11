@@ -48,6 +48,9 @@ DROVER_BEAN_RE="${DROVER_BEAN_RE:-${DROVER_BEAN_PREFIX}[a-z0-9]{4}}"
 #   drover_mtime FILE...          modification time, epoch seconds
 #   drover_size FILE              size in bytes
 #   drover_free_gb PATH           free GiB on PATH's filesystem (`df -g` is BSD-only; -P -k is POSIX)
+#   drover_clone SRC DST          copy a tree as a copy-on-write clone where the filesystem has them: BSD `cp -c` is
+#                                 APFS clonefile; GNU `cp --reflink=auto` clones on btrfs/XFS/bcachefs and
+#                                 falls back to a full copy (ext4: real disk and time).
 #   drover_date_parse FMT STR     STR (laid out as strftime FMT) -> epoch seconds; fields STR lacks come from now.
 #                                 GNU date ignores FMT and parses STR on its own; every FMT drover uses is one it reads.
 if stat -c %Y / >/dev/null 2>&1; then
@@ -56,6 +59,11 @@ if stat -c %Y / >/dev/null 2>&1; then
 else
   drover_mtime(){ stat -f %m "$@"; }
   drover_size(){ stat -f %z "$@"; }
+fi
+if cp --version >/dev/null 2>&1; then
+  drover_clone(){ cp -R --reflink=auto "$1" "$2"; }
+else
+  drover_clone(){ cp -Rc "$1" "$2"; }
 fi
 if date -d @0 >/dev/null 2>&1; then
   drover_date_parse(){ date -d "$2" +%s; }
