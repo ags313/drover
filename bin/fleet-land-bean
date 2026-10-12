@@ -2,6 +2,7 @@
 # fleet-land-bean <bean> — land ONE approved bean to LOCAL main by cherry-picking the bean's own
 # branch (fleet/<coder>-<bean>), NOT the bare fleet/<coder>. Fail-safe: cherry-picks in an ISOLATED
 # scratch worktree; real main is fast-forwarded ONLY if the cherry-pick is clean AND the gates pass.
+# A commit that conflicts on its own lands as one squash of the whole branch when that merge is clean.
 # NEVER pushes (deploy stays a human step or fleet-push). Anything that conflicts or fails is left for
 # manual landing under state/needs-land. Local commit only.
 #
@@ -73,6 +74,34 @@ MAIN worktree add -q --detach "$wt" ${DROVER_MAIN_BRANCH} || { flag "worktree ad
 WT(){ git -C "$wt" "$@"; }
 base=$(WT rev-parse HEAD)
 cleanup(){ WT cherry-pick --abort 2>/dev/null; MAIN worktree remove --force "$wt" 2>/dev/null; rm -rf "$wt"; }
+# resolve unmerged paths with the branch's side when every one is a bean file; 1 when any code file conflicts
+take_bean_theirs(){
+  local f nonbean=0
+  while IFS= read -r f; do [ -n "$f" ] || continue; case "$f" in .beans/*) ;; *) nonbean=$((nonbean+1));; esac; done < <(WT diff --name-only --diff-filter=U)
+  [ "$nonbean" -eq 0 ] && [ -n "$(WT diff --name-only --diff-filter=U)" ] || return 1
+  while IFS= read -r f; do [ -n "$f" ] || continue; WT checkout --theirs -- "$f" 2>/dev/null; WT add -- "$f"; done < <(WT diff --name-only --diff-filter=U)
+}
+# A commit that conflicts on its own can still land when the coder merged main into the branch and resolved
+# the conflict in that merge commit (2026-10-12: forum-8fqi, forum-alvr flagged "content conflict" while
+# `git merge-tree main <branch>` was clean). Land the branch's net diff as ONE squash commit on the same
+# scratch worktree, so the same gates and the same ff run on it. A squash that conflicts outside .beans is
+# a real conflict: manual land.
+squash_land(){  # $1 = the commit whose cherry-pick conflicted
+  local subj
+  WT cherry-pick --abort 2>/dev/null; WT reset -q --hard "$base"
+  if ! WT merge --squash "$br" >/dev/null 2>&1; then
+    take_bean_theirs || { cleanup; flag "$DROVER_LAND_CONFLICT on ${1:0:9}, and the whole-branch squash conflicts too — manual land"; return 1; }
+  fi
+  WT diff --cached --quiet && return 0   # net diff already on main: tip stays at base -> ALREADY-LANDED
+  subj=$(MAIN log -1 --format=%s "$(printf '%s\n' "$picks" | head -1)")
+  case "$subj" in *"$bean"*) ;; *) subj="$subj ($bean)";; esac
+  WT commit -q --no-verify -m "$subj" -m "Squash of $br: cherry-picking ${1:0:9} conflicted; the branch's merge of ${DROVER_MAIN_BRANCH} resolves it.
+
+$(MAIN log --reverse --no-merges --format='- %h %s' "${DROVER_MAIN_BRANCH}..$br")" \
+    || { cleanup; flag "squash of $br could not be committed — manual land"; return 1; }
+  how="squash of $n_picks commit"
+}
+how="$n_picks commit"
 
 for c in $picks; do   # SHAs are single tokens — word-splitting is safe here
   if ! WT cherry-pick -x "$c" >/dev/null 2>&1; then
@@ -81,15 +110,12 @@ for c in $picks; do   # SHAs are single tokens — word-splitting is safe here
       WT cherry-pick --skip >/dev/null 2>&1 || { cleanup; flag "cherry-pick $c empty but could not be skipped"; exit 1; }
       continue
     fi
-    # a conflict only in bean files is safe to take --theirs; a conflict in any other file is a manual land
-    nonbean=0
-    while IFS= read -r f; do [ -n "$f" ] || continue; case "$f" in .beans/*) ;; *) nonbean=$((nonbean+1));; esac; done < <(WT diff --name-only --diff-filter=U)
-    any=$(WT diff --name-only --diff-filter=U | grep -c .)
-    if [ "$any" -gt 0 ] && [ "$nonbean" -eq 0 ]; then
-      while IFS= read -r f; do [ -n "$f" ] || continue; WT checkout --theirs -- "$f" 2>/dev/null; WT add -- "$f"; done < <(WT diff --name-only --diff-filter=U)
+    # a conflict only in bean files is safe to take --theirs; a conflict in any other file -> squash the branch
+    if take_bean_theirs; then
       WT cherry-pick --continue --no-edit >/dev/null 2>&1 || { cleanup; flag "cherry-pick $c stuck after bean resolve"; exit 1; }
     else
-      cleanup; flag "$DROVER_LAND_CONFLICT on ${c:0:9} — manual land"; exit 1
+      squash_land "$c" || exit 1
+      break
     fi
   fi
 done
@@ -145,7 +171,7 @@ if [ -n "${DROVER_TEST_CHANGED:-}" ]; then
 fi
 
 if [ "${FLEET_LAND_DRY:-0}" = 1 ]; then
-  cleanup; echo "DRY $bean via $br ($n_picks commit) — clean cherry-pick, gates OK; would ff ${DROVER_MAIN_BRANCH} to ${tip:0:9} (no write)"; exit 0
+  cleanup; echo "DRY $bean via $br ($how) — clean land, gates OK; would ff ${DROVER_MAIN_BRANCH} to ${tip:0:9} (no write)"; exit 0
 fi
 # advance LOCAL main by fast-forward only (never a merge, never a push). Serial caller avoids races.
 # main moving mid-land (a harvest or bean commit) is a RACE, not a land failure: do NOT flag. flag()
@@ -181,4 +207,4 @@ cleanup; rm -f "$STATE/needs-land/$bean"
 ( cd "$REPO" && beans update "$bean" -s completed >/dev/null 2>&1 )
 rm -f "$STATE/approved/$bean" "$STATE/owner/$bean"
 ledger LANDED
-echo "LANDED $bean via $br ($n_picks commit) -> local ${DROVER_MAIN_BRANCH} $(MAIN rev-parse --short HEAD); NOT pushed"
+echo "LANDED $bean via $br ($how) -> local ${DROVER_MAIN_BRANCH} $(MAIN rev-parse --short HEAD); NOT pushed"
