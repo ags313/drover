@@ -21,3 +21,5 @@ Fix: seed the gate worktrees with drover_clone, the same as seats. Keep the syml
 - [ ] fleet-verify-main and fleet-land-bean use drover_clone for DROVER_CLONE_DIRS
 - [ ] a project with Turbopack passes the push gate without an npm ci in DROVER_TEST_ALL
 - [ ] README gate section says the gate worktree holds a copy, not a symlink
+
+2026-10-12 16:15, panel2: the cumulative verify runs DROVER_BUILD (tsc) in the verify worktree before DROVER_TEST_ALL runs npm ci. The worktree shares the main checkout node_modules, so a bean that adds a package (panel2-33bs, basic-ftp) fails the push gate with TS2307 until someone runs npm ci in the main checkout. Fix idea: run the install step before the build, or install when package-lock.json differs from the checkout.
