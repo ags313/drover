@@ -1,11 +1,11 @@
 ---
 # drover-5akx
 title: route_land_conflicts never matches fleet-land-bean's conflict flag
-status: todo
+status: completed
 type: bug
 priority: normal
 created_at: 2026-10-12T00:25:10Z
-updated_at: 2026-10-12T10:52:06Z
+updated_at: 2026-10-12T12:45:43Z
 ---
 
 bin/fleet-watch:788 routes a needs-land bean back to a coder only when the reason contains "content conflict in", but bin/fleet-land-bean:92 flags "content conflict on <sha> — manual land". So with DROVER_AUTOLAND=1 a conflicted approved bean sits flagged forever (integration_pick at :524 matches "content conflict" and works, but only runs under the WIP cap). Seen on the forum project 2026-10-12 (forum-7t7w, forum-8fqi, forum-alvr).
