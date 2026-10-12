@@ -46,7 +46,7 @@ minute; and each of those failures now has a guard (a spend cap, a no-op detecto
    |        v
    |    inbox/  -->  drain_inbox
    |        |   DONE with unchecked items -> PARTIAL -> back to the same coder (3x -> lead)
-   |        |   BLOCKED                   -> state/blocked (lead reads it)
+   |        |   BLOCKED                   -> state/blocked (lead reads it) + state/parked/<bean>: not re-dispatched
    |        |   DONE                      -> one review, on a DIFFERENT harness
    |        v
    |   REVIEWER seat  --  cherry-picks the named commits onto a detached main, builds, tests
@@ -113,6 +113,21 @@ stamp `state/last` so the tick-stall alert doesn't fire on a watcher that's runn
 4. **Drain the inbox** — route each announcement: DONE → a cross-harness review; PARTIAL → back to the coder;
    CHANGES → a followup; APPROVE → held for landing; BLOCKED → the lead. Stale announcements (a bean the seat is
    no longer on) are logged and ignored; a late DONE still routes its review.
+
+   **BLOCKED parks the bean.** The bean stays `todo` on the board, so before parking, top-up re-queued it and
+   refill handed it straight back to the same seat every tick. On 2026-10-12 one bean was dispatched 54 times
+   and another 36, and every run ended in the same BLOCKED. Now the watcher writes `state/parked/<bean>`, which
+   holds the reason (`REPEAT <reason>` when the same reason came back twice in a row), next to the
+   `state/blocked` line. Top-up and refill skip a parked bean, and a later DONE on it clears the park. Three
+   things lift a park:
+   - `fleet-watch unpark <bean>` removes the park and re-queues the bean (`--dry-run` previews).
+   - A change to the bean file's content after the park lifts it on the next pass, for example when the lead
+     answers in the bean. The park records a fingerprint of the file (`updated_at` excluded). An mtime-only
+     touch (heal-drift restoring files) or an `updated_at` bump does not lift it. `fleet-ghost-reap` never
+     returns a parked bean to todo.
+   - `fleet-unblock` (step 10) triages parked beans like held ones. A `HUMAN:` reason goes to
+     `state/human-decisions` and a lead reason to `state/lead-decisions`, and both stay parked. A REPEAT goes
+     to the lead. Anything else is re-dispatched with a re-examine brief, at most twice.
 5. **Retry reviews** that found no free reviewer last tick.
 6. **Reap task files** whose claim is provably dead (bean completed on main, re-routed, reported and idle, or
    silent past 45 min for a reviewer / 90 min for a coder). A `working` or `blocked` seat is never reaped.
@@ -259,7 +274,7 @@ scripts call each other by absolute path, so only your interactive shell is affe
 | Command | Does |
 |---|---|
 | `fleet` | Roster, spawn (`up`), `assign`, `review`, `followup`, `land`, `sync`, `rules`, `models`, `usage`, `stale`, and pane helpers (`read`, `keys`, `wait`, `cancel`, `blocked`). `fleet --help`, and `--dry-run` on every mutating verb. |
-| `fleet-watch` | The loop. `run`, `once`, `enqueue <bean>`, `queue`. |
+| `fleet-watch` | The loop. `run`, `once`, `enqueue <bean>`, `queue`, `unpark <bean>` (lift a BLOCKED park), `dispatch` (one drain + top-up + refill pass). |
 | `fleet-land-bean` | Land ONE approved bean to LOCAL main: cherry-pick its own branch in an isolated worktree, gate, ff-only. Never pushes. Used by auto-land; run by hand too. |
 | `fleet-verify-main` | The cumulative merge-queue gate: full build+suite on a clean detached worktree at a ref. Exit 0 = safe to push. |
 | `fleet-push` | The only sanctioned push: runs `fleet-verify-main`, pushes local main to origin only if green. Never force. |
@@ -269,7 +284,7 @@ scripts call each other by absolute path, so only your interactive shell is affe
 | `fleet-slot` | flock-based limit on concurrent heavy runs: `run [--push] -- <cmd>`, `hold`, `held`, `status`. `FLEET_PUSH_SLOTS` parallel push slots, separate from the general slots; the child inherits the lock, a crashed holder is released by the kernel. Each child also gets a lower-only per-user process ceiling (`FLEET_NPROC_LIMIT`) and `JEST_MAX_WORKERS=2`. |
 | `fleet-check-inline-jest-fanout` | Fails when a prompt or script runs jest through `node -e` with more than one worker (a fork bomb). `[--self-test] [path...]`; exit 1 on a hit. |
 | `fleet-completed-audit` | List beans `completed` on main whose code isn't actually landed. `--count` for the cached number. |
-| `fleet-unblock` | Triage the held (`noop-held`) pile: un-hold finished beans, keep date-gated ones, digest lead/human decisions, re-dispatch the rest with a re-examine brief. `--dry-run`. |
+| `fleet-unblock` | Triage the held (`noop-held`) and BLOCKED (`parked`) piles: un-hold finished beans, keep date-gated ones, digest lead/human decisions, re-dispatch the rest with a re-examine brief. `--dry-run`. |
 | `fleet-ghost-reap` | Return in-progress beans that no fleet state names back to `todo`, naming commits already on main. Refuses on an unreadable board. `--dry-run`. |
 | `fleet-spec-feed` | When a seat starves, file ONE bean: decompose a stuck epic, else verify-then-implement an orphan OpenSpec change. Capped, deduped by tag `spec-feed`. Refuses on an unreadable board. `--dry-run`. |
 | `fleet-done` | What an agent runs when it finishes. The only way the fleet learns about it. |

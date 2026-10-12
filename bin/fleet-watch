@@ -22,6 +22,8 @@
 #   fleet-watch route-land      hand needs-land beans flagged for a conflict or failed tests to a live coder, then exit
 #   fleet-watch top-up          queue ready beans from the board (the tick's top-up step), then exit
 #   fleet-watch land-lane       one auto_push then one auto_land pass (DROVER_AUTOLAND lane), wait for both, exit
+#   fleet-watch dispatch        one inbox drain, queue top-up and refill pass (the tick's dispatch steps), then exit
+#   fleet-watch unpark <bean>   lift a BLOCKED bean's park and re-queue it
 #   fleet-watch enqueue <bean>  add a bean to the global queue
 #   fleet-watch queue           show the queue
 set -uo pipefail
@@ -77,14 +79,28 @@ wait for both, then exit. The pass the landing lane runs every 60s under DROVER_
 whose owner is dead. Mutating.
 H
       ;;
+    dispatch) cat <<'H'
+fleet-watch dispatch
+Run the tick's dispatch steps once — drain the inbox, top up the queue, refill free coders — then exit.
+Mutating.
+H
+      ;;
+    unpark) cat <<'H'
+fleet-watch unpark <bean>
+A BLOCKED announcement parks the bean (state/parked/<bean>): top-up and refill skip it, so it is not handed
+back to a seat every tick. Remove the park and put the bean back in the queue. A change to the bean file's
+content after it was parked lifts the park too (an mtime-only touch does not). Exit 1 if the bean is not parked.
+--dry-run  print what would be unparked; change nothing
+H
+      ;;
     once) cat <<'H'
 fleet-watch once
 Run one watcher tick (dialogs, budget, inbox, refill), then exit. Mutating.
 --dry-run  print preview; do not tick
 H
       ;;
-    run) sed -n '2,26p' "$0" ;;
-    *) sed -n '2,26p' "$0" ;;
+    run) sed -n '2,28p' "$0" ;;
+    *) sed -n '2,28p' "$0" ;;
   esac
 }
 
@@ -97,6 +113,9 @@ if [ "$FLEET_DRY_RUN" = 1 ]; then
   case "$verb" in
     enqueue)
       echo "agent="; echo "brief="; echo "branch="; echo "prompt=enqueue ${2:-}"
+      exit 0 ;;
+    unpark)
+      echo "agent="; echo "brief="; echo "branch="; echo "prompt=unpark ${2:-}"
       exit 0 ;;
     once|run)
       echo "agent="; echo "brief="; echo "branch="; echo "prompt=tick"
@@ -121,6 +140,10 @@ case "$verb" in
   enqueue)
     : > "$Q/$(date +%s%N)-$2"; echo "queued $2"; exit 0 ;;
   queue)   ls "$Q" 2>/dev/null | sed 's/^[0-9]*-//' ; exit 0 ;;
+  unpark)
+    [ -n "${2:-}" ] || { echo "usage: fleet-watch unpark <bean>" >&2; exit 2; }
+    [ -f "$STATE/parked/$2" ] || { echo "not parked: $2"; exit 1; }
+    rm -f "$STATE/parked/$2"; : > "$Q/$(date +%s%N)-$2"; log "UNPARKED $2 by hand — re-queued" >/dev/null; echo "unparked $2"; exit 0 ;;
 esac
 
 # --- 3. dialogs -------------------------------------------------------------
@@ -233,6 +256,19 @@ owner_blocks(){ local bean="$1" seat="$2" own f="$STATE/owner/$1"
   if [ $(( $(date +%s) - $(drover_mtime "$f") )) -ge 259200 ]; then log "OWNER EXPIRED: $bean was $own's (72h untouched) -> $seat"; return 1; fi
   if [ -f "$STATE/credit-dead/$own" ] || ! "$DROVER_BIN"/fleet status 2>/dev/null | awk -v o="$own" '$1==o && $3!="MISSING"{f=1} END{exit !f}'; then
     log "OWNER HANDOVER: $bean from $own (missing or out of credits) -> $seat"; return 1; fi
+  return 0; }
+# Content fingerprint of a bean file, `updated_at` excluded: a park records it, and only a real change lifts
+# the park. Not the mtime: heal-drift restores every bean file (same content, new mtime) and the ghost reaper
+# rewrites a bean it thinks abandoned; either one silently lifted a HUMAN park (review of drover-3lof).
+bean_fp(){ local bf; bf=$(ls "$REPO/.beans/$1--"*.md 2>/dev/null | head -1); [ -n "$bf" ] || return 0
+  grep -v '^updated_at:' "$bf" | cksum | awk '{print $1 "-" $2}'; }
+# 0 = the bean is parked: its last announcement was BLOCKED and nobody has lifted it. `fleet-watch unpark`
+# lifts it, and so does an edit to the bean's content after the park (the lead answered in the bean).
+parked(){ local p="$STATE/parked/$1" was now
+  [ -f "$p" ] || return 1
+  was=$(sed -n 's/^fp //p' "$p"); now=$(bean_fp "$1")
+  if [ -n "$was" ] && [ -n "$now" ] && [ "$was" != "$now" ]; then
+    rm -f "$p"; log "UNPARKED $1 — bean file content changed since it was parked"; return 1; fi
   return 0; }
 # Record owners lazily from coder task files (covers hand dispatches too) and flag any bean held by two coders.
 owner_sync(){ mkdir -p "$STATE/owner" "$STATE/double"; local f s b seen=""
@@ -394,11 +430,21 @@ drain_inbox(){
         # landed it (2026-09-18: one bean went to a coder every few minutes to re-verify landed work).
         case "$summary" in APPROVE*) mkdir -p "$STATE/approved"; : > "$STATE/approved/$bean"; log "APPROVED $bean by $a — held out of the queue until landed";; esac ;;
       *:DONE)  # a coder finished -> route a review on a different harness
+        rm -f "$STATE/parked/$bean"   # the block is resolved
         local ck rev; ck=$(kind_of "$a")
         # one review per bean: a coder re-announcing DONE must not fan out a second reviewer
         if grep -lq -- "	$bean	" "$TASKS"/*reviewer* 2>/dev/null; then log "SKIP review of $bean — already under review ($(grep -l -- "	$bean	" "$TASKS"/*reviewer* 2>/dev/null | xargs -n1 basename | tr "\n" " "))"; rm -f "$TASKS/$a"; continue; fi
         route_review "$a" "$bean" ;;
-      *:BLOCKED) echo "$a $bean $summary" >> "$STATE/blocked"; log "BLOCKED needs lead: $a $bean — ${summary:0:80}" ;;
+      *:BLOCKED)
+        # Park it. The bean stays todo on the board, so top-up re-queued it and refill handed it straight back
+        # to the same seat, every tick (2026-10-12: forum-21u3 dispatched 54 times, drover-13ly 36, each run
+        # ending in the same BLOCKED). The same reason twice in a row marks the park REPEAT: fleet-unblock
+        # then hands it to the lead instead of re-dispatching it.
+        local prev; prev=$(grep -F " $bean " "$STATE/blocked" 2>/dev/null | tail -1); prev=${prev#* }
+        echo "$a $bean $summary" >> "$STATE/blocked"; mkdir -p "$STATE/parked"
+        if [ "$prev" = "$bean $summary" ]; then printf 'REPEAT %s\nfp %s\n' "$summary" "$(bean_fp "$bean")" > "$STATE/parked/$bean"
+        else printf '%s\nfp %s\n' "$summary" "$(bean_fp "$bean")" > "$STATE/parked/$bean"; fi
+        log "BLOCKED needs lead: $a $bean — ${summary:0:80} — parked (fleet-watch unpark $bean)" ;;
     esac
   done
 }
@@ -532,6 +578,7 @@ print("\n".join(b["id"] for b in bs[:20]))
     grep -lq -- "	$id	" "$TASKS"/* 2>/dev/null && continue
     grep -lq -- "^$id	" "$STATE"/followups/* 2>/dev/null && continue
     [ -f "$STATE/reviews/$id" ] || [ -f "$STATE/approved/$id" ] || [ -f "$STATE/noop-held/$id" ] && continue   # awaiting a reviewer or a landing
+    parked "$id" && continue                                                                                # BLOCKED, waiting on the lead
     touch "$Q/$i-$id"; i=$((i+1)); n=$((n+1))
   done
   [ "$n" = 0 ] || log "QUEUE topped up with $n ready bean(s)"
@@ -640,6 +687,7 @@ refill(){
     if [ -f "$STATE/lead-owned/$bean" ]; then log "SKIP $bean — the lead is running it"; continue; fi
     if owner_blocks "$bean" "$a"; then log "SKIP $bean for $a — owned by $(cat "$STATE/owner/$bean"); one bean, one coder"; continue; fi
     if [ -f "$STATE/reviews/$bean" ] || [ -f "$STATE/approved/$bean" ] || [ -f "$STATE/noop-held/$bean" ]; then log "SKIP $bean — awaiting review, landing, or held after no-op rounds; no coder re-dispatch"; continue; fi
+    if parked "$bean"; then log "SKIP $bean — parked after BLOCKED; fleet-watch unpark $bean"; continue; fi
     bf=$(cd "$REPO" && git ls-files .beans | grep -m1 "^.beans/$bean--")
     if [ -z "$bf" ] || ! (cd "$REPO" && git cat-file -e "${DROVER_MAIN_BRANCH}:$bf" 2>/dev/null); then
       log "SKIP $bean — not on ${DROVER_MAIN_BRANCH} (commit the bean file first); left out of the queue"; continue
@@ -941,6 +989,7 @@ if [ "${1:-run}" = once ]; then tick; exit 0; fi
 if [ "${1:-run}" = route-land ]; then route_land_conflicts; exit 0; fi
 if [ "${1:-run}" = top-up ]; then top_up_queue; exit 0; fi
 if [ "${1:-run}" = land-lane ]; then auto_push; wait; auto_land; wait; exit 0; fi
+if [ "${1:-run}" = dispatch ]; then drain_inbox; top_up_queue; refill; exit 0; fi
 log "fleet-watch started (tick ${TICK}s)"
 # Landing lane on its own 60s cadence, decoupled from the full tick: when the tick itself grows long
 # (a slow drain_inbox or retry_reviews pass), approved beans should not wait behind it. auto_push/

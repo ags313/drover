@@ -5,7 +5,7 @@ status: todo
 type: bug
 priority: high
 created_at: 2026-10-12T20:33:31Z
-updated_at: 2026-10-12T20:33:31Z
+updated_at: 2026-10-12T20:41:57Z
 ---
 
 A coder verdict `BLOCKED` does not park the bean. fleet-watch appends the summary to `state/blocked` and logs "BLOCKED needs lead", but the bean stays `todo` on the board, so `top_up_queue` (`beans list --ready`) enqueues it again on the next tick and the same seat gets it again. Each pass costs a full seat run that ends in the same BLOCKED verdict.
@@ -20,7 +20,7 @@ Fix, in fleet-watch:
 Tests (`eval/eval-checkers.sh`): a stub seat that answers BLOCKED; two ticks -> one DISPATCH; after `unpark` -> a second DISPATCH. The old noop-held path keeps its cases.
 
 Acceptance:
-- [ ] a BLOCKED bean is dispatched once, not every tick
-- [ ] `fleet-watch unpark <bean>` re-queues it
-- [ ] eval cases pass; existing cases unchanged
-- [ ] README: the parked state and the unpark verb under the BLOCKED section
+- [x] a BLOCKED bean is dispatched once, not every tick
+- [x] `fleet-watch unpark <bean>` re-queues it
+- [x] eval cases pass; existing cases unchanged
+- [x] README: the parked state and the unpark verb under the BLOCKED section

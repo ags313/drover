@@ -7,7 +7,7 @@ the work vanishes from dispatch for good. 2026-09-22: 108 leaf beans were in-pro
 task, review, followup, owner, approval or hold — three of them blocking a whole epic's next stage.
 
 Ghost = in-progress, not an epic/milestone, no live child, no fleet state naming it (task file,
-followup, reviews/approved/needs-land/noop-held/owner marker), and not touched for GRACE minutes (a
+followup, reviews/approved/needs-land/noop-held/owner/parked marker), and not touched for GRACE minutes (a
 just-dispatched bean has a task file; the grace covers the announce -> route window).
 
 A noop-held marker expires after 24h: it gates dispatch, so it needs a reaper. Ninety of them once sat
@@ -88,7 +88,9 @@ for b in board:
     if b['status'] != 'in-progress' or b['type'] in ('epic', 'milestone'): continue
     if any(c['status'] not in ('completed', 'scrapped') for c in b.get('children') or []): continue
     if i in tasks or i in fups: continue
-    if any(marked(d, i) for d in ('reviews', 'approved', 'needs-land', 'noop-held', 'owner')): continue
+    # parked: its seat announced BLOCKED and it waits on the lead or a human, not abandoned. Resetting it to todo
+    # rewrote the bean file and the watcher took that for the lead's answer (review of drover-3lof).
+    if any(marked(d, i) for d in ('reviews', 'approved', 'needs-land', 'noop-held', 'owner', 'parked')): continue
     try:
         age = (now - datetime.datetime.fromisoformat(b['updatedAt'].replace('Z', '+00:00'))).total_seconds() / 60
     except Exception:
