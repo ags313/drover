@@ -67,6 +67,13 @@ DROVER_MAIN_BRANCH="${DROVER_MAIN_BRANCH:-main}"
 DROVER_REMOTE="${DROVER_REMOTE:-origin}"
 DROVER_UPSTREAM="$DROVER_REMOTE/$DROVER_MAIN_BRANCH"
 
+# Reasons fleet-land-bean writes to state/needs-land/<bean> that are a coder's to fix. fleet-watch routes a
+# flagged bean by matching these, so writer and matchers read one definition: the router once matched
+# "content conflict in" while the writer said "content conflict on", and conflicted beans sat flagged forever.
+DROVER_LAND_CONFLICT="content conflict"
+DROVER_LAND_TESTS="related tests failed"
+DROVER_LAND_STALE="stale branch"
+
 # Where herdr puts each seat's worktree, and the beans id prefix (read from the repo's .beans.yml).
 DROVER_WORKTREES="${DROVER_WORKTREES:-$HOME/.herdr/worktrees/$(basename "${DROVER_REPO:-repo}")}"
 if [ -z "${DROVER_BEAN_PREFIX:-}" ] && [ -f "${DROVER_REPO:-/nonexistent}/.beans.yml" ]; then

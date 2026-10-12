@@ -5,10 +5,10 @@ status: todo
 type: bug
 priority: normal
 created_at: 2026-10-12T00:25:10Z
-updated_at: 2026-10-12T00:25:10Z
+updated_at: 2026-10-12T10:52:06Z
 ---
 
 bin/fleet-watch:788 routes a needs-land bean back to a coder only when the reason contains "content conflict in", but bin/fleet-land-bean:92 flags "content conflict on <sha> — manual land". So with DROVER_AUTOLAND=1 a conflicted approved bean sits flagged forever (integration_pick at :524 matches "content conflict" and works, but only runs under the WIP cap). Seen on the forum project 2026-10-12 (forum-7t7w, forum-8fqi, forum-alvr).
 
-- [ ] Match the text fleet-land-bean actually writes (e.g. *"content conflict"*), in one shared place so the two cannot drift again
-- [ ] eval-checkers case: a needs-land file with fleet-land-bean's exact reason is routed
+- [x] Match the text fleet-land-bean actually writes (e.g. *"content conflict"*), in one shared place so the two cannot drift again
+- [x] eval-checkers case: a needs-land file with fleet-land-bean's exact reason is routed

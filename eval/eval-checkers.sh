@@ -8,6 +8,7 @@
 #                        merely contains "reviewer" -> quiet
 #   fleet-claim reap     a claim on a bean missing from main: under 24h kept, older released
 #   fleet-slot           re-entry under FLEET_SLOT_HELD does not wait; a held general slot blocks a second run
+#   route-land           fleet-land-bean's own conflict flag -> routed to a live coder; an env-failure flag -> kept
 # No network, no keys. Exit 1 on the first wrong answer.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")/../bin" && pwd)"
@@ -88,5 +89,24 @@ up=$(DROVER_MAIN_BRANCH=trunk DROVER_REMOTE=fork bash -c '. "$0"; printf %s "$DR
 [ "$up" = fork/trunk ] && ok 'DROVER_MAIN_BRANCH/DROVER_REMOTE set the upstream' || bad "upstream is '$up', want fork/trunk"
 def=$(bash -c '. "$0"; printf %s "$DROVER_UPSTREAM"' "$BIN/drover-env")
 [ "$def" = origin/main ] && ok 'upstream defaults to origin/main' || bad "default upstream is '$def'"
+
+# --- route_land_conflicts: the reason fleet-land-bean writes is the reason fleet-watch routes ----------------
+# The real fleet-land-bean flags bean-rl (its only commit conflicts with main); a copy of fleet-watch beside a
+# stub `fleet` (one live coder) runs one routing pass. bean-env's reason is an env failure -> stays flagged.
+cd "$DROVER_REPO" || exit 1
+echo 1 > src/r.txt; git add -A; git commit -qm 'r'
+git checkout -qb fleet/c1-bean-rl; echo B > src/r.txt; git add -A; git commit -qm 'feat: r (bean-rl)'
+git checkout -q main; echo M > src/r.txt; git add -A; git commit -qm 'main moves r'
+"$BIN"/fleet-land-bean bean-rl >/dev/null 2>&1
+echo 'typecheck failed on cherry-pick — manual land' > "$FLEET_STATE/needs-land/bean-env"
+python3 -c 'import os, sys, time; t = time.time() - 300; [os.utime(f, (t, t)) for f in sys.argv[1:]]' \
+  "$FLEET_STATE/needs-land/bean-rl" "$FLEET_STATE/needs-land/bean-env" 2>/dev/null
+mkdir -p "$T/wbin"; cp "$BIN"/fleet-watch "$BIN"/drover-env "$T/wbin/"
+printf '#!/usr/bin/env bash\n[ "$1" = status ] && printf "NAME KIND STATE\\nclaude-coder claude idle\\n"\n' > "$T/wbin/fleet"; chmod +x "$T/wbin/fleet"
+FLEET_BRIEFS="$T/home/briefs" "$T/wbin/fleet-watch" route-land >/dev/null 2>&1
+grep -q '^bean-rl	' "$FLEET_STATE/followups/claude-coder" 2>/dev/null && [ ! -e "$FLEET_STATE/needs-land/bean-rl" ] \
+  && ok "route-land hands fleet-land-bean's conflict flag to a live coder" \
+  || bad "route-land left bean-rl flagged: $(cat "$FLEET_STATE/needs-land/bean-rl" 2>/dev/null || echo 'no needs-land file — land-bean wrote nothing')"
+[ -e "$FLEET_STATE/needs-land/bean-env" ] && ok 'route-land keeps an env-failure flag' || bad 'route-land routed an env failure'
 
 [ "$fail" = 0 ] && echo 'all checker cases pass' || { echo 'checker cases FAILED'; exit 1; }

@@ -64,7 +64,7 @@ if [ -z "$picks" ]; then
   echo "note: $bean had no new commits — cleared approved marker"; exit 0
 fi
 n_picks=$(printf '%s\n' "$picks" | grep -c .)
-[ "$n_picks" -gt 40 ] && { flag "$n_picks commits ahead — stale branch, land manually"; exit 1; }
+[ "$n_picks" -gt 40 ] && { flag "$n_picks commits ahead — $DROVER_LAND_STALE, land manually"; exit 1; }
 
 # ISOLATED scratch worktree at current main; cherry-pick there. WT() = the worktree's own HEAD.
 wt="$STATE/land-wt/$bean.$$"
@@ -89,7 +89,7 @@ for c in $picks; do   # SHAs are single tokens — word-splitting is safe here
       while IFS= read -r f; do [ -n "$f" ] || continue; WT checkout --theirs -- "$f" 2>/dev/null; WT add -- "$f"; done < <(WT diff --name-only --diff-filter=U)
       WT cherry-pick --continue --no-edit >/dev/null 2>&1 || { cleanup; flag "cherry-pick $c stuck after bean resolve"; exit 1; }
     else
-      cleanup; flag "content conflict on ${c:0:9} — manual land"; exit 1
+      cleanup; flag "$DROVER_LAND_CONFLICT on ${c:0:9} — manual land"; exit 1
     fi
   fi
 done
@@ -132,7 +132,7 @@ if [ -n "${DROVER_TEST_CHANGED:-}" ]; then
   changed_args=$(printf '%s\n' "$diffnames" | tr '\n' ' ')
   run_gate "$DROVER_TEST_CHANGED" test "${DROVER_GATE_STALL:-300}"; grc=$?
   [ "$grc" -eq 124 ] && { cleanup; flag "related tests STALLED — no output ${DROVER_GATE_STALL:-300}s (hung, not a clock) — manual land ($STATE/land-$bean-test.log)"; exit 1; }
-  [ "$grc" -eq 0 ]   || { cleanup; flag "related tests failed on cherry-pick — manual land ($STATE/land-$bean-test.log)"; exit 1; }
+  [ "$grc" -eq 0 ]   || { cleanup; flag "$DROVER_LAND_TESTS on cherry-pick — manual land ($STATE/land-$bean-test.log)"; exit 1; }
 fi
 
 if [ "${FLEET_LAND_DRY:-0}" = 1 ]; then

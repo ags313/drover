@@ -19,6 +19,7 @@
 #
 #   fleet-watch                 run the loop (foreground; background it)
 #   fleet-watch once            one tick, then exit
+#   fleet-watch route-land      hand needs-land beans flagged for a conflict or failed tests to a live coder, then exit
 #   fleet-watch enqueue <bean>  add a bean to the global queue
 #   fleet-watch queue           show the queue
 set -uo pipefail
@@ -52,6 +53,13 @@ H
     queue) cat <<'H'
 fleet-watch queue
 List beans in the global FIFO queue. Read-only.
+H
+      ;;
+    route-land) cat <<'H'
+fleet-watch route-land
+Hand each needs-land bean flagged for a content conflict or failing related tests (older than 2 minutes) to its
+owner if live, else the least-loaded live coder, then exit. The same pass a tick runs under DROVER_AUTOLAND=1.
+Mutating.
 H
       ;;
     once) cat <<'H'
@@ -521,7 +529,7 @@ integration_pick(){  # $1 = free coder seat under the WIP cap
     # Test failures against the CURRENT main are rebase work too: approved beans sat flagged
     # "related tests failed" while coders idled (the suites pass on main, the branches assert
     # what main has since changed). Env failures are the gate's, never a coder's: skip those.
-    case "$why" in *"content conflict"*|*"stale branch"*|*"related tests failed"*|*"dependency install failed"*) ;; *) continue ;; esac
+    case "$why" in *"$DROVER_LAND_CONFLICT"*|*"$DROVER_LAND_STALE"*|*"$DROVER_LAND_TESTS"*|*"dependency install failed"*) ;; *) continue ;; esac
     br=$(cd "$REPO" && git for-each-ref --format='%(refname:short)' "refs/heads/fleet/*-$b" | head -1); [ -n "$br" ] || continue
     brief="$REPORTS/lead-land-$b-by-$a.md"
     { echo "# LAND FOLLOWUP — $b (integration lane, $(date +%F)) — approved work that can't land; rebase it"
@@ -785,7 +793,7 @@ route_land_conflicts(){
   live=$("$DROVER_BIN"/fleet status 2>/dev/null | awk 'NR>1 && $3!="MISSING" && $1 ~ /coder(-[0-9]+)?$/ {print $1}')
   for f in "$STATE"/needs-land/*; do
     [ -f "$f" ] || continue; b="${f##*/}"; reason=$(LC_ALL=C tr -cd '\40-\176' < "$f")
-    case "$reason" in *"content conflict in"*|*"related tests failed"*) ;; *) continue ;; esac
+    case "$reason" in *"$DROVER_LAND_CONFLICT"*|*"$DROVER_LAND_TESTS"*) ;; *) continue ;; esac   # drover-env; never a literal
     [ $(( $(date +%s) - $(drover_mtime "$f") )) -ge 120 ] || continue      # let a racing re-land settle first
     owner=$(head -1 "$STATE/owner/$b" 2>/dev/null); seat=""
     if [ -n "$owner" ] && printf '%s\n' "$live" | grep -qx -- "$owner" && ! printf '%s' " $BROKE " | grep -q " $(kind_of "$owner") "; then seat=$owner
@@ -904,6 +912,7 @@ observe_tick(){
 }
 
 if [ "${1:-run}" = once ]; then tick; exit 0; fi
+if [ "${1:-run}" = route-land ]; then route_land_conflicts; exit 0; fi
 log "fleet-watch started (tick ${TICK}s)"
 # Landing lane on its own 60s cadence, decoupled from the full tick: when the tick itself grows long
 # (a slow drain_inbox or retry_reviews pass), approved beans should not wait behind it. auto_push/
