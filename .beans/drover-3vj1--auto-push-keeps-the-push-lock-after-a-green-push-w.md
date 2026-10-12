@@ -21,3 +21,6 @@ Expected: a green or failed push removes the lock it holds, including a lock it 
 - [ ] after a green push the lock is gone within one tick
 - [ ] after a failed push the lock is gone within one tick
 - [ ] eval check: simulate a takeover and a green push; assert no lock remains
+
+
+Deadlock, confirmed 14:06: with the stale lock present and nothing to push (ahead 0), auto_push returns at the `ahead` check before it looks at the lock, so the lock is never taken over or cleared, and auto_land skips every tick (its guard: `[ -d state/.push-lock ] && return`). Approved clean beans then never land. Workaround used: delete state/.push-lock when its pid is dead. Fix should also move the stale-lock takeover before the `ahead` early return, or let auto_land ignore a lock whose owner is dead.
