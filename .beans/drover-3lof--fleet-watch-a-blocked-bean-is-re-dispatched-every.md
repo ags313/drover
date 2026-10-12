@@ -1,11 +1,11 @@
 ---
 # drover-3lof
 title: 'fleet-watch: a BLOCKED bean is re-dispatched every tick (forum-21u3 x54, drover-13ly x36)'
-status: todo
+status: completed
 type: bug
 priority: high
 created_at: 2026-10-12T20:33:31Z
-updated_at: 2026-10-12T20:41:57Z
+updated_at: 2026-10-12T22:20:47Z
 ---
 
 A coder verdict `BLOCKED` does not park the bean. fleet-watch appends the summary to `state/blocked` and logs "BLOCKED needs lead", but the bean stays `todo` on the board, so `top_up_queue` (`beans list --ready`) enqueues it again on the next tick and the same seat gets it again. Each pass costs a full seat run that ends in the same BLOCKED verdict.
