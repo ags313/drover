@@ -40,6 +40,8 @@ DROVER_TEST="${DROVER_TEST:-}"            # e.g. 'npx jest <file>' — how to ru
 # APPROVED beans to LOCAL main (fleet-land-bean: isolated worktree, gated, ff-only, never pushes), then
 # pushes the green batch (fleet-push / fleet-verify-main). The gates below drive it; empty = skip a gate.
 DROVER_AUTOLAND="${DROVER_AUTOLAND:-0}"
+DROVER_PUSH_MIN_AHEAD="${DROVER_PUSH_MIN_AHEAD:-1}"        # auto-push waits for this many unpushed commits (1 = every land)
+DROVER_PUSH_MAX_WAIT_MIN="${DROVER_PUSH_MAX_WAIT_MIN:-0}"  # ...or until the oldest is this many minutes old (0 = off)
 DROVER_TYPECHECK="${DROVER_TYPECHECK:-}"        # per-bean fast gate, e.g. 'npx tsc --noEmit'  (empty = skip)
 DROVER_TEST_CHANGED="${DROVER_TEST_CHANGED:-}"  # per-bean tests for the changed files; $CHANGED = the paths,
                                                 # e.g. 'npx jest --findRelatedTests $CHANGED --passWithNoTests --silent'

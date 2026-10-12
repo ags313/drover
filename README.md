@@ -147,7 +147,8 @@ stamp `state/last` so the tick-stall alert doesn't fire on a watcher that's runn
     train cap, and that the seat is not credit-dead. A free seat that finds the queue empty calls
     `fleet-spec-feed`, which files one bean from a stuck epic or an orphan OpenSpec change.
 13. **Push + land** (only with `DROVER_AUTOLAND=1`) — push first: the cumulative gate + push via
-    `fleet-verify-main` (a red pauses landing, with the reason in `state/land-paused`); then one approved
+    `fleet-verify-main` (a red pauses landing, with the reason in `state/land-paused`), started once main is
+    `DROVER_PUSH_MIN_AHEAD` commits ahead or its oldest unpushed commit is `DROVER_PUSH_MAX_WAIT_MIN` old; then one approved
     bean per tick to LOCAL main via `fleet-land-bean`, which yields while a push is in flight.
 
 `state/last` holds a one-screen summary of the latest tick; `watch/watch.log` has every decision with a
@@ -324,6 +325,8 @@ values as `${VAR:-value}` so an environment variable still wins. See [`examples/
 | `DROVER_ROSTER` | 3 coders + 3 reviewers on claude/codex/opencode | `name:harness` pairs. Role = last word of the name. |
 | `DROVER_BUILD`, `DROVER_TEST` | empty | Build and single-test commands quoted into coder and reviewer briefs. `DROVER_BUILD` is also the build half of the cumulative push gate. |
 | `DROVER_AUTOLAND` | `0` | `1` lets the watcher land approved beans and push green batches. Off = landing stays with the lead. |
+| `DROVER_PUSH_MIN_AHEAD` | `1` | Auto-push waits until local main is this many commits ahead of `$DROVER_REMOTE/$DROVER_MAIN_BRANCH` before it starts the verify+push, so N lands make one push and one CI run. `fleet-push` ignores it. |
+| `DROVER_PUSH_MAX_WAIT_MIN` | `0` (off) | Auto-push pushes a batch below `DROVER_PUSH_MIN_AHEAD` once its oldest unpushed commit (commit time) is this many minutes old, so one bean never waits overnight. `fleet-push` ignores it. |
 | `DROVER_TYPECHECK`, `DROVER_TEST_CHANGED` | empty | Per-bean land gate: a fast typecheck, and tests for the changed files (`$CHANGED`). Empty = that gate is skipped. |
 | `DROVER_TEST_ALL` | empty | Full suite for the cumulative push gate (`fleet-verify-main`). Empty + empty `DROVER_BUILD` = the gate refuses to green-light a push. |
 | `DROVER_CODE_PATHS` | empty (any non-bean file) | `fleet-completed-audit`: ERE of paths that count as code. |

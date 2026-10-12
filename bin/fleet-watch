@@ -20,6 +20,7 @@
 #   fleet-watch                 run the loop (foreground; background it)
 #   fleet-watch once            one tick, then exit
 #   fleet-watch route-land      hand needs-land beans flagged for a conflict or failed tests to a live coder, then exit
+#   fleet-watch auto-push       one auto_push pass (batch check, full-suite gate, push main), wait for it, exit
 #   fleet-watch top-up          queue ready beans from the board (the tick's top-up step), then exit
 #   fleet-watch land-lane       one auto_push then one auto_land pass (DROVER_AUTOLAND lane), wait for both, exit
 #   fleet-watch dispatch        one inbox drain, queue top-up and refill pass (the tick's dispatch steps), then exit
@@ -93,6 +94,13 @@ content after it was parked lifts the park too (an mtime-only touch does not). E
 --dry-run  print what would be unparked; change nothing
 H
       ;;
+    auto-push) cat <<'H'
+fleet-watch auto-push
+Run one auto_push pass, wait for it, then exit: the batch check (DROVER_PUSH_MIN_AHEAD, DROVER_PUSH_MAX_WAIT_MIN),
+the full-suite gate (fleet-verify-main), then the push of main. The pass the landing lane runs every 60s under
+DROVER_AUTOLAND=1. Mutating.
+H
+      ;;
     once) cat <<'H'
 fleet-watch once
 Run one watcher tick (dialogs, budget, inbox, refill), then exit. Mutating.
@@ -101,6 +109,8 @@ H
       ;;
     run) sed -n '2,28p' "$0" ;;
     *) sed -n '2,28p' "$0" ;;
+    run) sed -n '2,27p' "$0" ;;
+    *) sed -n '2,27p' "$0" ;;
   esac
 }
 
@@ -906,6 +916,20 @@ push_lock_held(){
 # 240s, 480s, ... capped at 3600s; a green or already-pushed pass clears it.
 backoff_wait(){ local n nb; read -r n nb < "$STATE/push-backoff" 2>/dev/null || return 1; [ "$(date +%s)" -lt "${nb:-0}" ]; }
 backoff_fail(){ local n=0 d; read -r n _ < "$STATE/push-backoff" 2>/dev/null; n=$(( ${n:-0} + 1 )); d=$(( 120 * (1 << (n>5?5:n)) )); [ $d -gt 3600 ] && d=3600; echo "$n $(( $(date +%s) + d ))" > "$STATE/push-backoff"; log "BACKOFF: gate failure #$n, next attempt in ${d}s"; }
+# 0 = start the verify+push now: $1 (commits ahead) reaches DROVER_PUSH_MIN_AHEAD, or the oldest unpushed
+# commit's commit time is DROVER_PUSH_MAX_WAIT_MIN or more minutes old (0 = no max wait). A non-number reads
+# as the default, so a typo never stops pushes.
+push_batch_ready(){
+  local min=${DROVER_PUSH_MIN_AHEAD:-1} wait=${DROVER_PUSH_MAX_WAIT_MIN:-0} first age
+  case $min in ''|*[!0-9]*) min=1 ;; esac
+  case $wait in ''|*[!0-9]*) wait=0 ;; esac
+  [ "$1" -ge "$min" ] && return 0
+  [ "$wait" -gt 0 ] || return 1
+  first=$(cd "$REPO" && git log --format=%ct ${DROVER_UPSTREAM}..HEAD 2>/dev/null | tail -1)
+  age=$(( ($(date +%s) - ${first:-$(date +%s)}) / 60 ))
+  [ "$age" -ge "$wait" ] || return 1
+  log "AUTO-PUSH: $1 ahead < DROVER_PUSH_MIN_AHEAD=$min, oldest unpushed commit ${age}m old >= DROVER_PUSH_MAX_WAIT_MIN=$wait — pushing the batch"
+}
 auto_push(){
   # Push local main to origin after a land. SAFE because the DEPLOY-BOUNDARY full-suite gate
   # (fleet-verify-main) runs on a clean worktree first; on a cumulative RED we do NOT push and PAUSE
@@ -917,6 +941,7 @@ auto_push(){
   load_ok || return 0                             # the machine is short of memory: do not start a gate now
   local ahead; ahead=$(cd "$REPO" && git rev-list --count ${DROVER_UPSTREAM}..HEAD 2>/dev/null)
   [ "${ahead:-0}" -gt 0 ] || return 0
+  push_batch_ready "$ahead" || return 0
   local PK="$STATE/.push-lock"
   push_lock_held && return 0
   mkdir "$PK" 2>/dev/null || return 0
@@ -987,6 +1012,7 @@ observe_tick(){
 
 if [ "${1:-run}" = once ]; then tick; exit 0; fi
 if [ "${1:-run}" = route-land ]; then route_land_conflicts; exit 0; fi
+if [ "${1:-run}" = auto-push ]; then auto_push; wait; exit 0; fi
 if [ "${1:-run}" = top-up ]; then top_up_queue; exit 0; fi
 if [ "${1:-run}" = land-lane ]; then auto_push; wait; auto_land; wait; exit 0; fi
 if [ "${1:-run}" = dispatch ]; then drain_inbox; top_up_queue; refill; exit 0; fi

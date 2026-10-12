@@ -66,6 +66,12 @@ DROVER_LEAD_SEATS="${DROVER_LEAD_SEATS:-lead lead-backup}"   # never restarted b
 DROVER_MAIN_BRANCH="${DROVER_MAIN_BRANCH:-main}"
 DROVER_REMOTE="${DROVER_REMOTE:-origin}"
 DROVER_UPSTREAM="$DROVER_REMOTE/$DROVER_MAIN_BRANCH"
+# Push batching for fleet-watch auto_push (DROVER_AUTOLAND=1): wait until main is this many commits ahead of
+# $DROVER_UPSTREAM before the verify+push starts; one land was one push and one CI run (panel2: 42 pushes on
+# 2026-10-12). DROVER_PUSH_MAX_WAIT_MIN > 0 pushes a smaller batch anyway once its oldest unpushed commit is
+# that many minutes old, so one bean never waits overnight. fleet-push (manual) ignores both.
+DROVER_PUSH_MIN_AHEAD="${DROVER_PUSH_MIN_AHEAD:-1}"
+DROVER_PUSH_MAX_WAIT_MIN="${DROVER_PUSH_MAX_WAIT_MIN:-0}"
 
 # Reasons fleet-land-bean writes to state/needs-land/<bean> that are a coder's to fix. fleet-watch routes a
 # flagged bean by matching these, so writer and matchers read one definition: the router once matched

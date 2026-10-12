@@ -24,9 +24,9 @@ Tests (`eval/eval-checkers.sh`): a copy of fleet-watch beside a stub verify; mai
 
 Acceptance:
 - [ ] `DROVER_PUSH_MIN_AHEAD=5` on panel2: five lands make one push
-- [ ] `DROVER_PUSH_MAX_WAIT_MIN=60`: a single land is pushed within 60 minutes
-- [ ] defaults unchanged: eval cases for the old behaviour still pass
-- [ ] README documents both settings next to `DROVER_AUTOLAND`
+- [x] `DROVER_PUSH_MAX_WAIT_MIN=60`: a single land is pushed within 60 minutes
+- [x] defaults unchanged: eval cases for the old behaviour still pass
+- [x] README documents both settings next to `DROVER_AUTOLAND`
 
 ## Returned to todo by fleet-ghost-reap (2026-10-12)
 
