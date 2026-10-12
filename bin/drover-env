@@ -73,7 +73,7 @@ if [ -z "${DROVER_BEAN_PREFIX:-}" ] && [ -f "${DROVER_REPO:-/nonexistent}/.beans
   DROVER_BEAN_PREFIX=$(sed -n 's/^[[:space:]]*prefix:[[:space:]]*//p' "$DROVER_REPO/.beans.yml" | head -1 | tr -d "\"'")
 fi
 DROVER_BEAN_PREFIX="${DROVER_BEAN_PREFIX:-bean-}"
-DROVER_BEAN_RE="${DROVER_BEAN_RE:-${DROVER_BEAN_PREFIX}[a-z0-9]{4}}"
+DROVER_BEAN_RE="${DROVER_BEAN_RE:-${DROVER_BEAN_PREFIX}[a-z0-9]{4}\\b}"   # \b: a seat name like panel2-claude-coder must not match as panel2-clau
 
 # stat and date take different flags in GNU coreutils (Linux, NixOS, or a Mac with coreutils first on PATH)
 # and BSD (stock macOS). Probe the binaries, not the OS. On GNU `stat -f %m` is a filesystem query: it prints

@@ -22,3 +22,6 @@ Fix:
 - [ ] follow-ups dispatch in a project whose seat prefix equals the bean prefix
 - [ ] eval check covers the collision
 - [ ] drover-t59r's queued follow-up dispatches after the fix lands
+
+
+Hotfix 2026-10-12: DROVER_BEAN_RE now ends with \b (bin/drover-env). Follow-ups dispatch again in the drover and panel2 projects. Open: the seat-name guard in check_beans and the eval check.
