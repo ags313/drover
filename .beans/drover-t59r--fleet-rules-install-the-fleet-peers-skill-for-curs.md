@@ -1,11 +1,11 @@
 ---
 # drover-t59r
 title: 'fleet rules: install the fleet-peers skill for cursor'
-status: todo
+status: completed
 type: bug
 priority: normal
 created_at: 2026-10-11T23:14:23Z
-updated_at: 2026-10-11T23:24:51Z
+updated_at: 2026-10-12T19:38:42Z
 ---
 
 `fleet rules` / sync_skills installs pull-based fleet-peers manifests only for HOSTS="claude codex grok opencode" (bin/fleet:72; message at bin/fleet:814). Cursor is a supported harness (agent_args, fleet-yolo, fleet-yolo-config, cmd_usage list at bin/fleet:806) but cursor seats never get the skill. Check agy too.
