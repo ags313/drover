@@ -20,7 +20,7 @@
 #   fleet land <coder>             merge fleet/<coder> into main, parking/restoring the user's staged WIP around it
 #   fleet landable                 approved and flagged beans: branch, commits not on main, clean/CONFLICT, subject
 #   fleet sync [name]              bring idle agents' worktrees up to main (drop stale seeds, merge, re-seed current WIP)
-#   fleet rules                    install the fleet-peers skill package for claude/codex/grok/opencode
+#   fleet rules                    install the fleet-peers skill package for claude/codex/cursor/grok/opencode
 #   fleet stale [--kill|--report]  processes the agents left behind: orphans (pane gone), leftovers (dev/test
 #                                  procs under an idle agent), heavy (> FLEET_HEAVY_MB); --report feeds the sidebar
 #
@@ -69,7 +69,7 @@ REPORTS=$FLEET_REPORTS
 BRIEFS=$FLEET_BRIEFS
 SKILLS_HOME="${FLEET_SKILLS:-$HOME/.config/drover/skills}"
 SKILLS_SRC="${FLEET_SKILLS_SRC:-$DROVER_SRC/skills}"
-HOSTS="claude codex grok opencode"
+HOSTS="claude codex cursor grok opencode"   # agy: skills location unverified (no agy binary to test --plugin-dir against)
 
 # Strip global flags so `fleet assign --help` and `fleet land --yes` work
 # without changing existing positional call shapes.
@@ -119,7 +119,7 @@ H
     sync) cat <<'H'
 fleet sync [name]
 Bring idle agents' worktrees up to main. Writes pull-based host plugin
-manifests (claude/codex/grok/opencode) from drover's skills/.
+manifests (claude/codex/cursor/grok/opencode) from drover's skills/.
 --dry-run  print per-host manifest diffs (nothing when unchanged) AND, unless
            --skills, preview each requested worktree (agent, brief, branch, prompt)
 --skills   write manifests only; skip worktree merges
@@ -193,7 +193,7 @@ H
       ;;
     rules) cat <<'H'
 fleet rules
-Install pull-based fleet-peers plugin manifests for claude/codex/grok/opencode.
+Install pull-based fleet-peers plugin manifests for claude/codex/cursor/grok/opencode.
 --dry-run  print per-host diffs; write nothing
 H
       ;;
@@ -814,7 +814,7 @@ PY
 }
 cmd_rules() {
   sync_skills
-  echo "installed pull-based manifests under $SKILLS_HOME/{claude,codex,grok,opencode}/plugin.json"
+  echo "installed pull-based manifests under $SKILLS_HOME/{${HOSTS// /,}}/plugin.json"
 }
 
 cmd_land() {  # <coder> — merge fleet/<coder> into main even though main's index carries the user's staged WIP

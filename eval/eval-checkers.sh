@@ -11,6 +11,7 @@
 #   route-land           fleet-land-bean's own conflict flag -> routed to a live coder, owner recorded; an env-failure
 #                        flag, or a hand-off that cannot be written -> kept
 #   fleet-budget         two cursor seats -> a `cursor 2` row; the grok row stays as it was
+#   fleet rules          a fresh install would write cursor -> fires; right after install -> quiet
 # No network, no keys. Exit 1 on the first wrong answer.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")/../bin" && pwd)"
@@ -134,5 +135,14 @@ chmod +x "$T/bbin/fleet"
 out=$("$T/bbin/fleet-budget" 2>/dev/null)
 grep -qE '^cursor +2 +subscription$' <<<"$out" && ok 'budget counts cursor seats' || bad "budget cursor row: $(grep '^cursor' <<<"$out" || echo none)"
 grep -qE '^grok +1 +subscription$' <<<"$out" && ok 'budget grok row unchanged' || bad "budget grok row: $(grep '^grok' <<<"$out" || echo none)"
+# --- fleet rules: every harness with a plugin-dir loader gets a manifest -------------------------------------
+export FLEET_SKILLS="$T/skills"
+out=$("$BIN"/fleet rules --dry-run 2>/dev/null)   # captured: grep -q under pipefail SIGPIPEs fleet
+grep -qx 'host=cursor' <<<"$out" && ok 'rules dry-run would install the cursor manifest' || bad 'rules dry-run skips cursor'
+"$BIN"/fleet rules >/dev/null 2>&1
+grep -q '"host": "cursor"' "$FLEET_SKILLS/cursor/plugin.json" 2>/dev/null && [ -f "$FLEET_SKILLS/cursor/skills/fleet-peers/SKILL.md" ] \
+  && ok 'rules installs cursor/plugin.json with fleet-peers' || bad 'rules installed no cursor manifest'
+out=$("$BIN"/fleet rules --dry-run 2>/dev/null)
+grep -q '^host=' <<<"$out" && bad 'rules dry-run reports a diff right after install' || ok 'rules dry-run quiet after install'
 
 [ "$fail" = 0 ] && echo 'all checker cases pass' || { echo 'checker cases FAILED'; exit 1; }
