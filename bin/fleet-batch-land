@@ -1,0 +1,415 @@
+#!/usr/bin/env bash
+# fleet-batch-land — land every READY branch with ONE gate run and ONE push.
+#
+#   fleet-batch-land ready <agent> <bean>   seat/reviewer: register a finished, reviewed branch as READY
+#   fleet-batch-land run [--dry]            land all READY branches now (--dry: stack + gate, no push)
+#   fleet-batch-land tick                   run only if K branches are READY or the oldest waited N minutes
+#   fleet-batch-land status                 list READY / dropped / landed
+#
+# Seats never push main and never wait on this: they report READY and keep working. The lander is the
+# only process that pushes main. It is one worker, not a lock the seats queue behind.
+#
+# Mechanism: temp worktree off <remote>/<branch>; cherry-pick each READY branch's NAMED commits (never
+# the branch state, so a stale branch cannot delete work that landed after it forked);
+# ONE gate run on the stack; ONE push. If the gate fails, binary-search the stack for the first branch
+# that turns it red, drop it with the failure text, re-stack the rest. An env failure (test DB missing,
+# disk) drops nobody. Every landed seat SHA is proven an ancestor of <remote>/<branch> after the push.
+#
+# The gate defaults to `git push --dry-run`, which runs the repo's pre-push hook — the SAME gate a seat
+# push used to run. The real push then replays the hook's pass cache, so the gate runs once.
+set -o pipefail
+
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/drover-env"
+REPO=${BL_REPO:-${DROVER_REPO:?set DROVER_REPO (env or $DROVER_CONFIG)}}
+REMOTE=${BL_REMOTE:-origin}
+TARGET=${BL_BRANCH:-main}
+STATE=${BL_STATE:-$FLEET_STATE}
+K=${BL_K:-3}
+AGE_MIN=${BL_AGE_MIN:-20}
+WTROOT=${BL_WT_ROOT:-$DROVER_HOME/batch-land}
+LOGDIR=${BL_LOG_DIR:-$WTROOT/logs}
+REPORTS=${BL_REPORTS:-$FLEET_REPORTS}
+LEDGER=${BL_LEDGER:-$DROVER_HOME/watch/ledger}
+REQUIRE_APPROVED=${BL_REQUIRE_APPROVED:-1}
+REQUIRE_PUSHED=${BL_REQUIRE_PUSHED:-1}
+REQUIRE_REPORT=${BL_REQUIRE_REPORT:-1}
+CONFIRM_DROP=${BL_CONFIRM_DROP:-1}
+MAX_ATTEMPTS=${BL_MAX_ATTEMPTS:-3}
+GATE_CMD=${BL_GATE_CMD:-'git push --dry-run "$BL_REMOTE" HEAD:"$BL_TARGET"'}
+PUSH_CMD=${BL_PUSH_CMD:-'git push "$BL_REMOTE" HEAD:"$BL_TARGET"'}
+NOTIFY_CMD=${BL_NOTIFY_CMD:-$DROVER_BIN/fleet-done}
+# Environment failures drop nobody: the gate could not run, which says nothing about the branch. Add your own patterns
+# (fixture validator errors, expired leases, ...) in DROVER_ENV_FAIL_RE; they are ORed in.
+ENV_FAIL_RE=${BL_ENV_FAIL_RE:-'database URLs missing|ECONNREFUSED|ENOSPC|No space left|died of signal'${DROVER_ENV_FAIL_RE:+"|$DROVER_ENV_FAIL_RE"}}
+# The red-baseline check: the same checks on the bare target tip, with the test files the failing gate named in $BL_FAILING_FILES.
+BASELINE_CMD=${BL_BASELINE_CMD:-${DROVER_BUILD:-true}}
+TESTDB_UP=${BL_TESTDB_UP:-${DROVER_TESTDB_UP:-}}       # a command that prints `export NAME=value` lines for the gate's test database
+LINK_DIRS=${BL_LINK_DIRS:-${DROVER_BATCH_LINK_DIRS:-node_modules}}   # dependency dirs symlinked into the lander worktree
+ENABLED_MARKER=${BL_ENABLED_MARKER:-$STATE/batch-land-enabled}
+LOCKFILE=${BL_LOCKFILE:-$STATE/batch-land.flock}
+
+R() { git -C "$REPO" "$@"; }
+W() { git -C "$WT" "$@"; }
+# the dependency links are untracked symlinks (a symlink is not matched by `node_modules/`), so a bare clean would delete them
+wclean() { local d ex=(); for d in $LINK_DIRS; do ex+=(-e "$d"); done; assert_owned && W clean -fdq "${ex[@]}"; }
+wreset() { assert_owned && W reset -q --hard "$1" && wclean; }
+OWNER_TAG="fleet-batch-land worktree of $REPO"
+# never reset or clean a directory the lander did not create: refuse symlinks and anything without its ownership marker
+assert_owned() {
+  [ -n "${WT:-}" ] && [ ! -L "$WT" ] && [ ! -L "$WTROOT" ] && [ -f "$WTROOT/wt.owner" ] && [ "$(cat "$WTROOT/wt.owner")" = "$OWNER_TAG" ] && [ -f "$WT/.git" ] && return 0
+  return 1
+}
+now() { date +%s; }
+say() { printf '%s\n' "$*"; }
+die() { printf 'fleet-batch-land: %s\n' "$*" >&2; exit 1; }
+ledger() { printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$1" "${2:-}" >> "$LEDGER" 2>/dev/null || true; }
+rec_get() { sed -n "s/^$2=//p" "$STATE/ready/$1" | head -1; }
+
+mkdir -p "$STATE/ready" "$STATE/dropped" "$STATE/landed" "$LOGDIR"
+
+# ---------------------------------------------------------------- ready
+cmd_ready() {
+  local agent=${1:?usage: fleet-batch-land ready <agent> <bean>} bean=${2:?bean}
+  local branch=${BL_BRANCH_OF:-fleet/$agent-$bean} tip rtip report c commits=""
+  tip=$(R rev-parse --verify -q "refs/heads/$branch") || die "no branch $branch"
+  if [ "$REQUIRE_APPROVED" = 1 ] && [ ! -f "$STATE/approved/$bean" ]; then die "$bean has no reviewer APPROVE ($STATE/approved/$bean) — not READY"; fi
+  if [ "$REQUIRE_PUSHED" = 1 ]; then
+    rtip=$(R ls-remote "$REMOTE" "refs/heads/$branch" | cut -f1)
+    [ "$rtip" = "$tip" ] || die "$branch is not pushed at ${tip:0:9} (remote has ${rtip:-nothing}) — push the BRANCH (never main), then ready again"
+  fi
+  if [ "$REQUIRE_REPORT" = 1 ]; then
+    report="$REPORTS/$agent-$bean.md"
+    grep -q '^REBASED: YES' "$report" 2>/dev/null || die "$report has no 'REBASED: YES' line"
+    grep -q '^VERIFIED: BUILD 0 ' "$report" 2>/dev/null || die "$report has no 'VERIFIED: BUILD 0 ...' line — tests not green on their own"
+  fi
+  R fetch -q "$REMOTE" "$TARGET" || die "fetch $REMOTE $TARGET failed"
+  # named commits = the branch's own non-merge commits whose change is not already on the target
+  local upstream; upstream=$(R cherry "$REMOTE/$TARGET" "$tip" | awk '$1=="+"{print $2}')
+  for c in $(R rev-list --reverse --no-merges "$REMOTE/$TARGET..$tip"); do
+    case " $(printf '%s ' $upstream)" in *" $c "*) commits="$commits $c" ;; esac
+  done
+  commits=${commits# }
+  [ -n "$commits" ] || die "$branch has no commit ahead of $REMOTE/$TARGET (already landed?)"
+  # the approval, the report and the push gate all speak for ONE bean: a commit that does not name it is somebody else's work
+  local foreign=""
+  for c in $commits; do
+    if ! R log -1 --format=%B "$c" | grep -qiw -- "$bean" && ! R show --name-only --format= "$c" | grep -q "^\.beans/$bean--"; then
+      foreign="$foreign
+  ${c:0:9} $(R log -1 --format=%s "$c")"
+    fi
+  done
+  [ -z "$foreign" ] || die "$branch carries commit(s) that do not name $bean — not READY (split them onto their own branch, or name the bean):$foreign"
+  rm -f "$STATE/dropped/$bean"
+  { echo "agent=$agent"; echo "bean=$bean"; echo "branch=$branch"; echo "tip=$tip"; echo "since=$(now)"; echo "commits=$commits"; } > "$STATE/ready/$bean"
+  say "READY $bean $branch@${tip:0:9} ($(printf '%s' "$commits" | wc -w | tr -d ' ') commit(s)): $commits"
+  ledger READY "$bean"
+}
+
+# ---------------------------------------------------------------- lock
+# A kernel lock (lockf), not a pid file: it is released by the kernel when the holder and every child it spawned are gone,
+# so there is no stale-lock takeover to race, and a lander cannot delete another lander's lock.
+locked_run() {   # re-exec cmd_run under the lock
+  BL_LOCK_HELD=1 lockf -k -t 0 "$LOCKFILE" "$0" run "$@"
+  local rc=$?
+  if [ $rc -eq 75 ]; then say "another batch-land run holds the lock — exiting (seats are not waiting on it)"; return 0; fi
+  return $rc
+}
+
+# run a command string in the worktree in its OWN process group, so a SIGTERM to the lander can kill the whole tree
+CHILD=""
+run_group() {   # <logfile> <cmd>  -> RC
+  set -m
+  ( cd "$WT" && export FLEET_BATCH_LANDER=1 BL_REMOTE="$REMOTE" BL_TARGET="$TARGET" && eval "$2" ) > "$1" 2>&1 &
+  CHILD=$!
+  wait "$CHILD"; RC=$?
+  CHILD=""
+  set +m
+}
+on_term() {
+  if [ -n "$CHILD" ]; then
+    kill -TERM -- "-$CHILD" 2>/dev/null
+    local i; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do kill -0 -- "-$CHILD" 2>/dev/null || break; sleep 0.25; done
+    kill -KILL -- "-$CHILD" 2>/dev/null
+  fi
+  say "TERMINATED — gate/push process group stopped, READY records kept"
+  exit 143
+}
+
+# ---------------------------------------------------------------- stack
+ACTIVE=(); TIPS=(); ORIGIN_TIP=""
+DROPPED_LIST=""; RUN=""; REASON=""; PICK_ENV=0; ENV_ABORT=""; BASELINE_LOG=""
+
+# only added/removed lines outside .beans, sorted: the reviewed change as content, ignoring hunk offsets
+change_of() { git -C "$1" diff "$2^" "$2" -- . ':!.beans' | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' | LC_ALL=C sort; }
+
+# pick_bean <bean> <base> -> NEWTIP, or return 1 with REASON
+pick_bean() {
+  local bean=$1 base=$2 c p f conf nonbean commits agent
+  commits=$(rec_get "$bean" commits)
+  wreset "$base" || { REASON="worktree reset failed (stale lock or not owned)"; PICK_ENV=1; return 1; }
+  : > "$RUN/map.$bean"
+  for c in $commits; do
+    local before; before=$(W rev-parse HEAD)
+    if ! W cherry-pick -x "$c" >/dev/null 2>&1; then
+      conf=$(W diff --name-only --diff-filter=U)
+      nonbean=""; for f in $conf; do case "$f" in .beans/*) ;; *) nonbean="$nonbean $f" ;; esac; done
+      if [ -n "$conf" ] && [ -z "$nonbean" ]; then
+        for f in $conf; do W checkout --theirs -- "$f" 2>/dev/null; W add -- "$f"; done
+        W cherry-pick --continue --no-edit >/dev/null 2>&1 || { W cherry-pick --abort >/dev/null 2>&1; REASON="cherry-pick of ${c:0:9} stuck after bean-file resolve"; return 1; }
+      elif [ -n "$conf" ]; then
+        W cherry-pick --abort >/dev/null 2>&1
+        REASON="content conflict in${nonbean} on ${c:0:9} against $REMOTE/$TARGET — rebase the branch and ready it again"; return 1
+      elif W rev-parse -q --verify CHERRY_PICK_HEAD >/dev/null 2>&1 && W diff --quiet && W diff --cached --quiet \
+           && [ "$(W cherry "$base" "$c" "$c^" | awk '{print $1}')" = "-" ]; then
+        # an empty pick of a change git itself finds on the target (patch-id): the only legitimate "already landed"
+        W cherry-pick --skip >/dev/null 2>&1 && [ "$(W rev-parse HEAD)" = "$before" ] && ! W rev-parse -q --verify CHERRY_PICK_HEAD >/dev/null 2>&1 \
+          || { REASON="could not skip the already-landed commit ${c:0:9}"; PICK_ENV=1; return 1; }
+        printf '%s %s\n' "$c" "-" >> "$RUN/map.$bean"; continue
+      else
+        W cherry-pick --abort >/dev/null 2>&1
+        REASON="cherry-pick of ${c:0:9} failed before it started (index lock or worktree trouble), not a conflict"; PICK_ENV=1; return 1
+      fi
+    fi
+    p=$(W rev-parse HEAD)
+    if [ "$(change_of "$REPO" "$c")" != "$(change_of "$WT" "$p")" ]; then
+      REASON="landed diff of ${c:0:9} differs from the reviewed diff — refusing to land something nobody reviewed"; return 1
+    fi
+    printf '%s %s\n' "$c" "$p" >> "$RUN/map.$bean"
+  done
+  NEWTIP=$(W rev-parse HEAD)
+  return 0
+}
+
+drop_bean() {  # <bean> <reason> <logfile|''>
+  local bean=$1 reason=$2 log=${3:-} agent
+  agent=$(rec_get "$bean" agent)
+  { echo "DROPPED $bean at $(date -u +%FT%TZ)"; echo "reason: $reason"; [ -n "$log" ] && [ -f "$log" ] && { echo "--- gate log tail ($log)"; tail -40 "$log"; }; } > "$STATE/dropped/$bean"
+  rm -f "$STATE/ready/$bean"
+  DROPPED_LIST="$DROPPED_LIST $bean"
+  say "DROPPED $bean: $reason"
+  ledger DROPPED "$bean"
+  if [ "${BL_NO_NOTIFY:-0}" != 1 ]; then "$NOTIFY_CMD" "${agent:-unknown}" "$bean" CHANGES "batch-land dropped $bean: $reason" "$STATE/dropped/$bean" >/dev/null 2>&1 || true; fi
+}
+
+remove_active() {  # <index 1-based>
+  local i=$1 j n=${#ACTIVE[@]} na=() nt=()
+  for ((j=1;j<=n;j++)); do [ "$j" -eq "$i" ] && continue; na+=("${ACTIVE[$((j-1))]}"); done
+  ACTIVE=("${na[@]+"${na[@]}"}"); TIPS=()
+}
+
+# restack_from <i>: re-pick ACTIVE[i..] onto TIPS[i-1] (or the target tip); a bean that cannot be picked is dropped
+restack_from() {
+  local i=$1 base j
+  [ "$i" -eq 1 ] && base=$ORIGIN_TIP || base=${TIPS[$((i-2))]}
+  j=$i
+  while [ "$j" -le "${#ACTIVE[@]}" ]; do
+    if pick_bean "${ACTIVE[$((j-1))]}" "$base"; then
+      TIPS[$((j-1))]=$NEWTIP; base=$NEWTIP; j=$((j+1))
+    else
+      if [ "$PICK_ENV" = 1 ]; then ENV_ABORT="$REASON"; return 3; fi
+      drop_bean "${ACTIVE[$((j-1))]}" "$REASON" ""
+      local keep=("${TIPS[@]:0:$((j-1))}")
+      remove_active "$j"; TIPS=("${keep[@]+"${keep[@]}"}")
+    fi
+  done
+}
+
+# ---------------------------------------------------------------- gate
+GATE_N=0
+gate() {  # <tip> [force] -> 0 pass, 1 fail, 2 env failure. Memoised per tip unless force.
+  local tip=$1 force=${2:-} log memo=$RUN/gate.${1}
+  if [ -z "$force" ] && [ -f "$memo" ]; then return "$(cat "$memo")"; fi
+  GATE_N=$((GATE_N+1))
+  log=$LOGDIR/$(basename "$RUN")-gate$GATE_N-${tip:0:9}.log
+  GATE_LOG=$log
+  wreset "$tip" || { echo 2 > "$memo"; return 2; }
+  run_group "$log" "$GATE_CMD"
+  local rc=$RC
+  if [ $rc -ne 0 ] && grep -Eq "$ENV_FAIL_RE" "$log"; then rc=2; fi
+  [ $rc -ge 128 ] && rc=2          # killed by a signal: the machine, not the branch
+  [ $rc -gt 2 ] && rc=1
+  echo "$rc" > "$memo"; echo "$GATE_N $tip $rc" >> "$RUN/gates"
+  return $rc
+}
+gate_log_of() { ls -t "$LOGDIR"/"$(basename "$RUN")"-gate*-"${1:0:9}".log 2>/dev/null | head -1; }
+
+# A red stack is only a branch's fault if origin/main itself is green. Run the baseline check once, on the bare target tip, with the
+# test files the stack's gate named as failing (a build error needs none). Red baseline -> blame nobody.
+BASELINE_DONE=""; BASELINE_RC=0
+baseline_check() {  # <failing gate log> -> 0 green, 1 red, 2 env
+  [ -n "$BASELINE_DONE" ] && return $BASELINE_RC
+  BASELINE_DONE=1
+  local log=$LOGDIR/$(basename "$RUN")-baseline.log
+  BASELINE_LOG=$log
+  export BL_FAILING_FILES; BL_FAILING_FILES=$(grep -Eo "${DROVER_TEST_FILE_RE:-[A-Za-z0-9_./@-]+\\.(test|spec)\\.[a-z]+}" "${1:-/dev/null}" 2>/dev/null | sort -u | tr '\n' ' ')
+  wreset "$ORIGIN_TIP" || { BASELINE_RC=2; return 2; }
+  run_group "$log" "$BASELINE_CMD"
+  local rc=$RC
+  if [ $rc -ne 0 ] && grep -Eq "$ENV_FAIL_RE" "$log"; then rc=2; fi
+  [ $rc -ge 128 ] && rc=2
+  [ $rc -gt 2 ] && rc=1
+  BASELINE_RC=$rc; return $rc
+}
+
+# settle: gate the stack; on red, find the first branch that turns it red, drop it, re-stack. 0 ok / 1 empty / 2 env
+settle() {
+  local n tip lo hi mid r culprit
+  while :; do
+    n=${#ACTIVE[@]}; [ "$n" -eq 0 ] && return 1
+    tip=${TIPS[$((n-1))]}
+    gate "$tip"; r=$?
+    [ $r -eq 0 ] && return 0
+    [ $r -eq 2 ] && return 2
+    baseline_check "$(gate_log_of "$tip")"; r=$?
+    [ $r -eq 1 ] && return 5
+    [ $r -eq 2 ] && return 2
+    lo=1; hi=$n
+    while [ $lo -lt $hi ]; do
+      mid=$(( (lo+hi)/2 ))
+      gate "${TIPS[$((mid-1))]}"; r=$?
+      [ $r -eq 2 ] && return 2
+      if [ $r -eq 0 ]; then lo=$((mid+1)); else hi=$mid; fi
+    done
+    culprit=${ACTIVE[$((lo-1))]}; tip=${TIPS[$((lo-1))]}
+    if [ "$CONFIRM_DROP" = 1 ]; then          # a 20-minute gate must not drop a good branch on a flake
+      gate "$tip" force; r=$?
+      [ $r -eq 2 ] && return 2
+      [ $r -eq 0 ] && continue
+    fi
+    local lg; lg=$(gate_log_of "$tip")
+    drop_bean "$culprit" "gate failed on the stack ending at $culprit (all earlier READY branches passed)" "$lg"
+    local keep=("${TIPS[@]:0:$((lo-1))}")
+    remove_active "$lo"; TIPS=("${keep[@]+"${keep[@]}"}")
+    restack_from "$lo"
+  done
+}
+
+# ---------------------------------------------------------------- proof
+prove_and_record() {  # prints one PROOF line per landed seat commit; a bean is recorded LANDED only if EVERY one of its commits is proven
+  local bean s p bad=0 line ok
+  R fetch -q "$REMOTE" "$TARGET" || { say "PROOF-FAIL cannot fetch $REMOTE $TARGET"; return 1; }
+  PROVEN=""
+  for bean in "${ACTIVE[@]}"; do
+    ok=1; : > "$RUN/proof.$bean"
+    while read -r s p; do
+      [ -n "$s" ] || continue
+      if [ "$p" = "-" ]; then line="PROOF $bean ${s:0:9} -> already on $REMOTE/$TARGET (git cherry finds the same change before this batch)"
+      elif R merge-base --is-ancestor "$p" "$REMOTE/$TARGET"; then line="PROOF $bean ${s:0:9} -> ${p:0:9} ancestor-of $REMOTE/$TARGET: YES"
+      else line="PROOF $bean ${s:0:9} -> ${p:0:9} ancestor-of $REMOTE/$TARGET: NO"; ok=0; bad=1; fi
+      say "$line"; echo "$line" >> "$RUN/proof.$bean"
+    done < "$RUN/map.$bean"
+    if [ $ok = 1 ]; then cp "$RUN/proof.$bean" "$STATE/landed/$bean"; rm -f "$STATE/ready/$bean"; ledger LANDED "$bean"; PROVEN="$PROVEN $bean"
+    else say "NOT RECORDED $bean — proof failed, READY kept for the retry"; fi
+  done
+  return $bad
+}
+
+# ---------------------------------------------------------------- run
+ensure_wt() {
+  WT=$WTROOT/wt
+  [ ! -L "$WTROOT" ] || { say "ENV-FAIL $WTROOT is a symlink — not owned by the lander, refusing"; return 1; }
+  mkdir -p "$WTROOT"
+  if [ -L "$WT" ]; then say "ENV-FAIL $WT is a symlink — not owned by the lander (it may be a seat's worktree); refusing to reset or clean it"; return 1; fi
+  if [ -e "$WT" ]; then
+    assert_owned || { say "ENV-FAIL $WT exists but is not owned by the lander (no ownership marker) — refusing to reset or clean it; remove it by hand if it is really ours"; return 1; }
+  else
+    R worktree add -q --detach "$WT" "$REMOTE/$TARGET" || { say "ENV-FAIL worktree add failed"; return 1; }
+    printf '%s\n' "$OWNER_TAG" > "$WTROOT/wt.owner"
+  fi
+  local ld
+  for ld in $LINK_DIRS; do
+    [ -e "$WT/$ld" ] || { [ -e "$REPO/$ld" ] && mkdir -p "$(dirname "$WT/$ld")" && ln -s "$REPO/$ld" "$WT/$ld"; }
+  done
+  # untracked links make `git status` dirty, and a dirty tree has no pre-push cache key: the real push would run the gate a second time
+  local ex; ex=$(W rev-parse --git-path info/exclude); case "$ex" in /*) ;; *) ex="$WT/$ex" ;; esac
+  mkdir -p "$(dirname "$ex")"; local d; for d in $LINK_DIRS; do grep -qxF "/$d" "$ex" 2>/dev/null || echo "/$d" >> "$ex"; done
+  true
+}
+
+ensure_testdb() {  # the lander sets up the gate's test database itself - no seat needs a manual setup step
+  [ -n "$TESTDB_UP" ] || return 0
+  [ -z "${BL_TESTDB_READY:-}" ] || return 0
+  local out; out=$(cd "$WT" && bash -c "$TESTDB_UP" 2>"$RUN/testdb.err") || { say "ENV-FAIL test database setup failed: $(tail -3 "$RUN/testdb.err" | tr '\n' ' ')"; return 1; }
+  eval "$out"
+}
+
+cmd_run() {
+  if [ "${BL_LOCK_HELD:-}" != 1 ]; then locked_run "$@"; return $?; fi
+  local dry=0 attempt=1 bean ready=() n_ready
+  [ "${1:-}" = --dry ] && dry=1
+  trap on_term TERM INT HUP
+  # the marker is the lead's switch: nothing may push main without it, and it is re-read right before the push
+  if [ $dry = 0 ] && [ ! -f "$ENABLED_MARKER" ]; then say "batch lander not enabled ($ENABLED_MARKER missing) — not landing anything"; return 0; fi
+  RUN=$LOGDIR/run-$(date +%Y%m%dT%H%M%S)-$$; mkdir -p "$RUN"; echo $$ > "$RUN/pid"
+  for bean in $(ls -tr "$STATE/ready" 2>/dev/null); do ready+=("$bean"); done
+  n_ready=${#ready[@]}
+  [ "$n_ready" -gt 0 ] || { say "nothing READY"; return 0; }
+  while [ $attempt -le "$MAX_ATTEMPTS" ]; do
+    R fetch -q "$REMOTE" "$TARGET" || { say "ENV-FAIL fetch $REMOTE $TARGET failed"; return 3; }
+    ORIGIN_TIP=$(R rev-parse "$REMOTE/$TARGET")
+    ensure_wt || return 3
+    { W checkout -q --detach "$ORIGIN_TIP" && wreset "$ORIGIN_TIP"; } 2>"$RUN/checkout.err" || { say "ENV-FAIL cannot reset the lander worktree to $REMOTE/$TARGET ($(tail -2 "$RUN/checkout.err" | tr '\n' ' ')) — nothing dropped, READY records kept"; return 3; }
+    ensure_testdb || return 3
+    ACTIVE=(); TIPS=(); ENV_ABORT=""
+    # a READY record is a promise about one exact tip; a moved branch is a different review
+    for bean in "${ready[@]}"; do
+      [ -f "$STATE/ready/$bean" ] || continue
+      local br tip cur; br=$(rec_get "$bean" branch); tip=$(rec_get "$bean" tip); cur=$(R rev-parse --verify -q "refs/heads/$br")
+      if [ "$cur" != "$tip" ]; then drop_bean "$bean" "branch tip moved since READY (${tip:0:9} -> ${cur:0:9}): the reviewed commits are not what is on the branch" ""; continue; fi
+      ACTIVE+=("$bean")
+    done
+    restack_from 1; local rr=$?
+    [ $rr -eq 3 ] && { say "ENV-FAIL $ENV_ABORT — nothing dropped, READY records kept"; return 3; }
+    [ "${#ACTIVE[@]}" -gt 0 ] || { say "nothing landable after pick phase"; return 0; }
+    settle; local sr=$?
+    [ $sr -eq 2 ] && { say "ENV-FAIL gate could not run (log: $(gate_log_of "${TIPS[$((${#ACTIVE[@]}-1))]:-x}")) — no branch dropped, READY records kept"; return 3; }
+    [ $sr -eq 5 ] && { say "BASELINE-RED $REMOTE/$TARGET fails the same checks without any READY branch (log: $BASELINE_LOG) — nobody dropped, READY records kept, nothing pushed"; return 3; }
+    [ $sr -eq 1 ] && { say "every READY branch was dropped; nothing to push"; return 0; }
+    local final=${TIPS[$((${#ACTIVE[@]}-1))]}
+    say "STACK ${#ACTIVE[@]} branch(es) green at ${final:0:9}: ${ACTIVE[*]}  (gate runs: $GATE_N)"
+    if [ $dry = 1 ]; then say "DRY — not pushing"; return 0; fi
+    [ -f "$ENABLED_MARKER" ] || { say "ENV-FAIL enable marker removed while the gate ran — not pushing, READY records kept"; return 3; }
+    wreset "$final" || { say "ENV-FAIL cannot check out the green stack — not pushing"; return 3; }
+    local plog=$RUN/push.log
+    run_group "$plog" "$PUSH_CMD"
+    if [ $RC -eq 0 ]; then
+      say "PUSHED ${#ACTIVE[@]} branch(es) in 1 push; gate runs: $GATE_N"
+      prove_and_record || { say "PROOF FAILED — a pushed commit is not an ancestor of $REMOTE/$TARGET; do not trust the landing"; return 4; }
+      say "LANDED${PROVEN} -> $REMOTE/$TARGET $(R rev-parse --short "$REMOTE/$TARGET")${DROPPED_LIST:+ | DROPPED$DROPPED_LIST}"
+      return 0
+    fi
+    if grep -Eq 'rejected|non-fast-forward|fetch first|stale info' "$plog"; then
+      say "push raced: $REMOTE/$TARGET moved; re-stacking (attempt $((attempt+1)))"; attempt=$((attempt+1))
+      ready=(); for bean in "${ACTIVE[@]}"; do ready+=("$bean"); done
+      continue
+    fi
+    say "ENV-FAIL push refused (not a race): $(tail -3 "$plog" | tr '\n' ' ') — READY records kept, log $plog"; return 3
+  done
+  say "ENV-FAIL push raced $MAX_ATTEMPTS times — READY records kept"; return 3
+}
+
+# ---------------------------------------------------------------- tick / status
+cmd_tick() {
+  [ -f "$ENABLED_MARKER" ] || return 0
+  local n=0 oldest="" b s age
+  for b in $(ls "$STATE/ready" 2>/dev/null); do n=$((n+1)); s=$(rec_get "$b" since); { [ -z "$oldest" ] || [ "$s" -lt "$oldest" ]; } && oldest=$s; done
+  [ $n -gt 0 ] || return 0
+  age=$(( $(now) - oldest ))
+  if [ $n -ge "$K" ] || [ $age -ge $((AGE_MIN*60)) ]; then say "tick: $n READY, oldest ${age}s — landing"; cmd_run; else say "tick: $n READY, oldest ${age}s — waiting (K=$K, N=${AGE_MIN}m)"; fi
+}
+
+cmd_status() {
+  local b
+  say "READY:";   for b in $(ls "$STATE/ready" 2>/dev/null); do say "  $b $(rec_get "$b" branch)@$(rec_get "$b" tip | cut -c1-9)"; done
+  say "DROPPED:"; for b in $(ls "$STATE/dropped" 2>/dev/null); do say "  $b: $(sed -n 2p "$STATE/dropped/$b")"; done
+  say "LANDED:";  for b in $(ls "$STATE/landed" 2>/dev/null); do say "  $b ($(grep -c 'YES$' "$STATE/landed/$b") proven)"; done
+}
+
+sub=${1:-}; shift || true
+case "$sub" in
+  ready) cmd_ready "$@" ;;
+  run) cmd_run "$@"; exit $? ;;
+  tick) cmd_tick ;;
+  status) cmd_status ;;
+  *) echo "usage: fleet-batch-land ready <agent> <bean> | run [--dry] | tick | status" >&2; exit 2 ;;
+esac

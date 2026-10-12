@@ -58,6 +58,17 @@ DROVER_QUEUE_KEYWORDS="${DROVER_QUEUE_KEYWORDS:-}"
 # Generated files fleet-claim refuses to claim (ERE over repo paths). Empty = none.
 DROVER_GENERATED="${DROVER_GENERATED:-}"
 
+# Idle-seat refill (fleet-refill) and its queue. Seats whose role is coder/reviewer/analyst are refilled from
+# $FLEET_BRIEFS/queue; `fleet-feed` restocks that queue from the beans listed in DROVER_FOCUS_BEANS.
+# DROVER_FOCUS_BEANS="${DROVER_FOCUS_BEANS:-$HOME/.config/drover/focus-beans.txt}"
+# DROVER_REFILL_DEDICATED="${DROVER_REFILL_DEDICATED:-}"            # e.g. 'architect-seat pm-seat'
+# DROVER_REFILL_SKIP_HARNESSES="${DROVER_REFILL_SKIP_HARNESSES:-}"  # e.g. 'agy' while its quota is exhausted
+# DROVER_CRED_CHECKS: extra "label|command" lines for fleet-cred-check, one per line, e.g. 'aws:prod|aws sts get-caller-identity --profile prod'
+# Batch lander (fleet-batch-land): one gate run and one push for every READY branch. Opt-in: touch $FLEET_STATE/batch-land-enabled.
+# DROVER_TESTDB_UP="${DROVER_TESTDB_UP:-}"            # command that prints `export NAME=value` lines for the gate's test database
+# DROVER_ENV_FAIL_RE="${DROVER_ENV_FAIL_RE:-}"        # extra gate-log patterns that mean "the machine failed, not the branch"
+# DROVER_BATCH_LINK_DIRS="${DROVER_BATCH_LINK_DIRS:-node_modules}"   # dependency dirs symlinked into the lander worktree
+
 # Optional overrides (defaults shown).
 # DROVER_HOME="${DROVER_HOME:-$HOME/.local/share/drover}"       # queue, inbox, tasks, reports, state
 # DROVER_WORKTREES="${DROVER_WORKTREES:-$HOME/.herdr/worktrees/<basename of DROVER_REPO>}"

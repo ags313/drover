@@ -3,7 +3,7 @@
 #
 #   ./install.sh                  symlink bin/* into ~/.local/bin, create state dirs, seed config + briefs,
 #                                 render launchd plists into ~/Library/LaunchAgents (not loaded)
-#   ./install.sh --load           ...and load fleet-watch, fleet-stale, fleet-standup-hourly
+#   ./install.sh --load           ...and load fleet-watch, fleet-stale, fleet-standup-hourly, fleet-refill
 #   ./install.sh --load-watchdog  ...and also lead-watchdog (only if you run a backup-lead seat)
 #   ./install.sh --dry-run        print the plan, change nothing
 #   ./install.sh --force          replace existing files in ~/.local/bin that are not drover symlinks

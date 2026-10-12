@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# fleet-cred-check — are the credentials the fleet depends on valid right now, and are its daemons alive? Exit 1 if not.
+# Never prints a token. Run it at every standup: a dead credential is a stall alert, and a silent daemon is a dead one.
+#
+# Checks (each one can fail):
+#   gh auth, the git remote of DROVER_REPO, every command in DROVER_CRED_CHECKS (one per line "label|command", e.g.
+#   "aws:prod|aws sts get-caller-identity --profile prod"), the refill daemon's heartbeat (log mtime), and on macOS the
+#   login keychain (the real cause of repeated "token invalid": the keychain locks for background processes).
+# Env: DROVER_CRED_CHECKS  DROVER_REFILL_LABEL (launchd label shown in the restart hint)  FLEET_REFILL_STALE (seconds, default 600)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/drover-env"
+bad=0
+chk() { if "${@:2}" >/dev/null 2>&1; then echo "ok    $1"; else echo "DEAD  $1"; bad=1; fi; }
+chk gh gh auth status
+[ -n "${DROVER_REPO:-}" ] && chk "git remote" git -C "$DROVER_REPO" ls-remote --exit-code origin HEAD
+while IFS='|' read -r label cmd; do
+  [ -n "$label" ] || continue
+  if bash -c "$cmd" >/dev/null 2>&1; then echo "ok    $label"; else echo "DEAD  $label"; bad=1; fi
+done <<< "${DROVER_CRED_CHECKS:-}"
+# A daemon that is alive but silent is a stall: it logs a heartbeat every 10 ticks, so a log older than the limit is dead.
+stale=${FLEET_REFILL_STALE:-600}
+if [ -f "$FLEET_REFILL_LOG" ]; then
+  mt=$(stat -f %m "$FLEET_REFILL_LOG" 2>/dev/null || stat -c %Y "$FLEET_REFILL_LOG" 2>/dev/null || echo 0)
+  age=$(( $(date +%s) - mt ))
+  if [ "$age" -gt "$stale" ]; then
+    echo "DEAD  fleet-refill log silent ${age}s (>${stale}): restart it (launchctl kickstart -k gui/$(id -u)/${DROVER_REFILL_LABEL:-dev.drover.fleet-refill})"; bad=1
+  else echo "ok    fleet-refill heartbeat ${age}s"; fi
+fi
+if [ "$(uname)" = Darwin ]; then
+  security show-keychain-info "$HOME/Library/Keychains/login.keychain-db" >/dev/null 2>&1 && echo "ok    login keychain readable" \
+    || { echo "DEAD  login keychain locked (gh/git will fail): security unlock-keychain"; bad=1; }
+fi
+exit $bad

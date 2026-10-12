@@ -41,3 +41,10 @@ if [ -z "${DROVER_BEAN_PREFIX:-}" ] && [ -f "${DROVER_REPO:-/nonexistent}/.beans
 fi
 DROVER_BEAN_PREFIX="${DROVER_BEAN_PREFIX:-bean-}"
 DROVER_BEAN_RE="${DROVER_BEAN_RE:-${DROVER_BEAN_PREFIX}[a-z0-9]{4}}"
+
+# Refill daemon (fleet-refill), queue restock (fleet-feed), grouping (fleet-batch), health (fleet-cred-check).
+FLEET_REFILL_LOG="${FLEET_REFILL_LOG:-$DROVER_HOME/logs/fleet-refill.log}"      # heartbeat every 10 ticks; a log older than 10 min is a dead daemon
+DROVER_FOCUS_BEANS="${DROVER_FOCUS_BEANS:-$HOME/.config/drover/focus-beans.txt}" # one bean id per line; fleet-feed queues those with unchecked slices
+DROVER_REFILL_DEDICATED="${DROVER_REFILL_DEDICATED:-}"           # seat names fleet-refill never sends queue work to
+DROVER_REFILL_SKIP_HARNESSES="${DROVER_REFILL_SKIP_HARNESSES:-}" # harnesses with no quota/login right now: their seats swallow queue items
+DROVER_HUNT_AREAS="${DROVER_HUNT_AREAS:-}"                       # ';'-separated areas for opt-in standing hunts (REFILL_HUNTS=1)

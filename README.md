@@ -130,7 +130,10 @@ stamp `state/last` so the tick-stall alert doesn't fire on a watcher that's runn
 12. **Refill** every free coder: a followup beats the queue; then the next queued bean, after re-checking it
     is on main, still ready, not owned by another coder, not awaiting review or landing, within the epic
     train cap, and that the seat is not credit-dead. A free seat that finds the queue empty calls
-    `fleet-spec-feed`, which files one bean from a stuck epic or an orphan OpenSpec change.
+    `fleet-spec-feed`, which files one bean from a stuck epic or an orphan OpenSpec change. `fleet-refill` (a daemon,
+    `launchd/dev.drover.fleet-refill.plist.in`) hands queued items to idle seats, `fleet-feed` restocks that queue from
+    `DROVER_FOCUS_BEANS`, `fleet-batch` groups fix items, `fleet-prep` gives each assignment a clean branch, and
+    `fleet-cred-check` is the standup health check. Optional: `fleet-batch-land` lands every READY branch with one gate and one push.
 13. **Push + land** (only with `DROVER_AUTOLAND=1`) — push first: the cumulative gate + push via
     `fleet-verify-main` (a red pauses landing, with the reason in `state/land-paused`); then one approved
     bean per tick to LOCAL main via `fleet-land-bean`, which yields while a push is in flight.

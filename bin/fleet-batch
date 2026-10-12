@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""fleet-batch — merge queued hunt fix items into ONE brief per (area, class) group.
+
+Why: one fix item = one seat turn = one push through the gate. Hundreds of items meant hundreds of pushes and gate runs.
+Now one seat takes a whole group, fixes it, runs the affected tests, fixes what fails, and pushes ONCE.
+
+  fleet-batch [--dry-run]     group fix-*.txt in the refill queue into batch-<area>-<class>-<k>.txt
+
+A group is (area, fix|delete). It is batched when it has >= MIN_ITEMS items or its oldest item is >= MAX_AGE_MIN minutes old.
+A batch holds at most MAX_ITEMS items. Originals move to queue-batched/ (never deleted).
+Item -> (class, area) comes from the refill log line "HUNT #N <class> / <area>"; an item whose hunt is not in the
+log is left in the queue untouched.
+"""
+import glob, os, re, shutil, subprocess, sys, time
+
+
+def drover_env():
+    """The same config every bash script sees: source drover-env (next to this file) and read it back."""
+    env = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'drover-env')
+    keys = ['FLEET_BRIEFS', 'FLEET_REFILL_LOG']
+    out = subprocess.run(['bash', '-c', '. "$0"; for k in "$@"; do printf "%s=%s\\0" "$k" "${!k:-}"; done', env, *keys],
+                         capture_output=True, text=True, check=True).stdout
+    return dict(kv.split('=', 1) for kv in out.split('\0') if '=' in kv)
+
+
+E = drover_env()
+QDIR = f"{E['FLEET_BRIEFS']}/queue"
+DONE = f"{E['FLEET_BRIEFS']}/queue-batched"
+LOG = E['FLEET_REFILL_LOG']
+MIN_ITEMS = int(os.environ.get('BATCH_MIN_ITEMS', '4'))
+MAX_AGE_MIN = int(os.environ.get('BATCH_MAX_AGE_MIN', '60'))
+MAX_ITEMS = int(os.environ.get('BATCH_MAX_ITEMS', '5'))
+DELETE_CLASS = 'test that cannot fail'
+
+PROCESS = (
+    'PROCESS : ONE seat fixes this whole group, then runs the tests, fixes what fails, and pushes ONCE. '
+    '1) Fresh worktree off origin/main. 2) For EACH item: first check origin/main, and if it is already fixed there, write that '
+    'item as ALREADY FIXED (SHA) and skip it; otherwise write the failing test first, then the root-cause fix at the shared function. '
+    '3) After all items: run every test file you touched plus the suites that import the files you changed, inside fleet-slot '
+    '(cap the runner at two workers). 4) Fix every failure your changes caused; if a failure is not yours, say so with the file and the evidence. '
+    '5) ONE landing: merge origin/main first, then push through the normal hook (never skip it); while the batch lander is enabled, report READY instead (see PEERS). A push to your own fleet branch does not count as landing. '
+    '6) PROVE IT LANDED: for every SHA you will name, run git fetch origin main and git merge-base --is-ancestor <sha> origin/main, and paste the result. A SHA that fails is not done: finish the push or write PUSH PENDING for that item. '
+    '7) Report: one line per item = item id, commit SHA (verified in step 6) or ALREADY FIXED or NOT FIXED (reason) or PUSH PENDING. First line: DONE n/m, where n counts only items whose SHA passed step 6. Then fleet-done. No new beans.'
+)
+DELETE_NOTE = (
+    'THIS GROUP IS VACUOUS TESTS: the fix is DELETION, not strengthening. For each test or assertion: first prove it cannot fail '
+    '(mutate the code it claims to cover on a per-file copy; the suite stays green; paste that), then delete ONLY that test or '
+    'assertion. The file must still compile and its remaining tests pass.'
+)
+
+
+def hunt_meta():
+    meta = {}
+    try:
+        for l in open(LOG, errors='ignore'):
+            m = re.search(r'HUNT #(\d+) (.+?) / (.+?)( \[light\])?$', l.rstrip('\n'))
+            if m:
+                meta[int(m.group(1))] = (m.group(2), m.group(3))
+    except OSError:
+        pass
+    return meta
+
+
+def slug(s):
+    return re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')[:40]
+
+
+def main(dry):
+    meta = hunt_meta()
+    groups = {}
+    for f in sorted(glob.glob(f'{QDIR}/fix-*-standing-*-*.txt')):
+        m = re.search(r'-standing-(\d+)-', f)
+        if not m or int(m.group(1)) not in meta:
+            continue
+        c, a = meta[int(m.group(1))]
+        groups.setdefault((DELETE_CLASS if c == DELETE_CLASS else 'fix', a), []).append(f)   # by area; deletions kept apart
+    made = moved = 0
+    now = time.time()
+    for (cls, area), files in sorted(groups.items()):
+        oldest_min = (now - min(os.path.getmtime(f) for f in files)) / 60
+        if len(files) < MIN_ITEMS and oldest_min < MAX_AGE_MIN:
+            continue
+        for k in range(0, len(files), MAX_ITEMS):
+            chunk = files[k:k + MAX_ITEMS]
+            items = []
+            for i, f in enumerate(chunk, 1):
+                t = open(f, errors='ignore').read()
+                t = re.sub(r'^kind:\s*\w+\s*\n', '', t).strip()
+                items.append(f'ITEM {i}/{len(chunk)} ({os.path.basename(f)}): {t}')
+            body = (f'kind: coder\nBATCH: {len(chunk)} items, area "{area}"' + (f', class "{cls}"' if cls == DELETE_CLASS else ', mixed defect classes (each item names its own)') + '.\n'
+                    + (DELETE_NOTE + '\n' if cls == DELETE_CLASS else '') + PROCESS + '\n\n' + '\n\n'.join(items) + '\n')
+            name = f'{QDIR}/batch-{slug(area)}-{slug(cls)}-{int(now)}-{k // MAX_ITEMS + 1}.txt'
+            print(f'{"DRY " if dry else ""}BATCH {os.path.basename(name)}  items={len(chunk)}')
+            if dry:
+                continue
+            tmp = name + '.tmp'
+            open(tmp, 'w').write(body)
+            os.rename(tmp, name)                       # atomic: refill only globs *.txt
+            os.makedirs(DONE, exist_ok=True)
+            for f in chunk:
+                shutil.move(f, f'{DONE}/{os.path.basename(f)}')
+                moved += 1
+            made += 1
+    print(f'{"DRY " if dry else ""}batches={made} items_moved={moved} groups_seen={len(groups)}')
+
+
+if __name__ == '__main__':
+    main('--dry-run' in sys.argv)

@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""fleet-feed — keep the refill queue stocked from the focus beans, so seats work when the lead is away.
+
+For each bean id listed in DROVER_FOCUS_BEANS (one per line, default ~/.config/drover/focus-beans.txt): read the bean from
+origin/main; if it is todo/in-progress and has unchecked '- [ ]' items outside a LEAD/FOUNDER heading, and no queue item for it
+exists, and it was not claimed from the queue or assigned (ledger) within FEED_COOLDOWN_MIN minutes, write
+$FLEET_BRIEFS/queue/NNN-assign-<bean>.txt. fleet-refill hands that to an idle seat through `fleet assign` (clean branch).
+
+  fleet-feed             queue what is due; prints one line per bean queued
+Env: FEED_COOLDOWN_MIN (default 90)  FEED_MAX_QUEUE (default 12)  DROVER_FOCUS_BEANS  DROVER_FEED_FOCUS (words in the brief)
+"""
+import datetime as dt, glob, os, re, subprocess, sys, time
+
+
+def drover_env():
+    """The same config every bash script sees: source drover-env (next to this file) and read it back."""
+    env = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'drover-env')
+    keys = ['DROVER_REPO', 'FLEET_BRIEFS', 'FLEET_LEDGER', 'DROVER_BEAN_PREFIX', 'DROVER_CONFIG', 'DROVER_FOCUS_BEANS']
+    out = subprocess.run(['bash', '-c', '. "$0"; for k in "$@"; do printf "%s=%s\\0" "$k" "${!k:-}"; done', env, *keys],
+                         capture_output=True, text=True, check=True).stdout
+    return dict(kv.split('=', 1) for kv in out.split('\0') if '=' in kv)
+
+
+E = drover_env()
+REPO = E['DROVER_REPO']
+if not REPO:
+    sys.exit('fleet-feed: set DROVER_REPO (env or ~/.config/drover/config)')
+PREFIX = re.escape(E['DROVER_BEAN_PREFIX'] or 'bean-')
+BEAN = re.compile(PREFIX + r'[a-z0-9]{4}')
+Q = f"{E['FLEET_BRIEFS']}/queue"
+C = f"{E['FLEET_BRIEFS']}/queue-claimed"
+FOCUS = E['DROVER_FOCUS_BEANS'] or os.path.join(os.path.dirname(E['DROVER_CONFIG']), 'focus-beans.txt')
+COOL = int(os.environ.get('FEED_COOLDOWN_MIN', '90')) * 60
+MAXQ = int(os.environ.get('FEED_MAX_QUEUE', '12'))
+THEME = os.environ.get('DROVER_FEED_FOCUS', '')
+
+
+def git(*a):
+    return subprocess.run(['git', '-C', REPO, *a], capture_output=True, text=True, timeout=60).stdout
+
+
+os.makedirs(Q, exist_ok=True)
+os.makedirs(C, exist_ok=True)
+if not os.path.exists(FOCUS):
+    raise SystemExit(0)                                    # no focus list = nothing to feed
+subprocess.run(['git', '-C', REPO, 'fetch', '-q', 'origin', 'main'], capture_output=True, timeout=90)
+
+
+def bean_of(path):
+    m = BEAN.search(os.path.basename(path))
+    return m.group(0) if m else None
+
+
+queued = {b for b in (bean_of(p) for p in glob.glob(f'{Q}/*.txt')) if b}
+if len(queued) >= MAXQ:
+    raise SystemExit(0)
+now = time.time()
+recent = {b for p in glob.glob(f'{C}/*assign-*.txt') if now - os.path.getmtime(p) < COOL and (b := bean_of(p))}
+try:                                                       # a bean assigned directly (ledger) in the cooldown is held: never double-assign
+    for l in open(E['FLEET_LEDGER']):
+        f = l.rstrip('\n').split('\t')
+        if len(f) >= 6 and f[1] in ('assign', 'review') and BEAN.fullmatch(f[5]):
+            t = dt.datetime.strptime(f[0], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.timezone.utc).timestamp()
+            if now - t < COOL:
+                recent.add(f[5])
+except OSError:
+    pass
+files = git('ls-tree', '-r', '--name-only', 'origin/main', '.beans/').split('\n')
+n = 100
+for b in [l.strip() for l in open(FOCUS) if BEAN.fullmatch(l.strip())]:
+    if b in queued or b in recent:
+        continue
+    f = next((x for x in files if f'/{b}--' in x), None)
+    if not f:
+        continue
+    t = git('show', f'origin/main:{f}')
+    m = re.search(r'^status:\s*(\S+)', t, re.M)
+    if not m or m.group(1) not in ('todo', 'in-progress'):
+        continue
+    body = re.split(r'^#+\s*.*(?:LEAD|FOUNDER)[^\n]*\n', t, flags=re.M | re.I)[0]   # drop everything from a LEAD/FOUNDER heading on
+    open_n = len(re.findall(r'^\s*- \[ \]', body, re.M))
+    if open_n == 0:
+        continue
+    n += 1
+    scope = (f'Do the NEXT unchecked slices of {b} ({open_n} unchecked items outside LEAD/FOUNDER), one commit each, in order. First verify each is not already on '
+             f'origin/main (git log origin/main --grep={b}; match by subject: rebases change SHAs). Failing test first. Commit each slice on your branch, keep going, do NOT push '
+             f'(the batch lander lands READY branches; until it is enabled report READY with SHAs). Tick a box only with its proof.' + (f' Focus: {THEME}.' if THEME else ''))
+    open(f'{Q}/{n:03d}-assign-{b}.txt', 'w').write('kind: any\n' + scope + '\n')
+    print(f'queued {b} ({open_n} open)')
+    if len(queued) + (n - 100) >= MAXQ:
+        break

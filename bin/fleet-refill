@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""fleet-refill — keep idle seats working without the lead.
+
+Every poll (default 60 s):
+  1. IDLE = herdr status done/idle AND the visible screen unchanged for IDLE_POLLS polls AND no
+     "background work still running" marker on screen. (herdr's `done` is false mid-turn, so status alone is never trusted.)
+  2. An idle seat gets the next item from $FLEET_BRIEFS/queue/*.txt (atomic claim by rename). A queue item named
+     NNN-assign-<bean>.txt goes through `fleet assign` (a clean branch off origin/main via fleet-prep, the ledger and
+     the task file); anything else is sent as a plain prompt. Optional STANDING HUNTS (REFILL_HUNTS=1 and
+     DROVER_HUNT_AREAS set) generate proof-or-nothing audit items when the queue is empty; hunters append proven
+     findings to the queue as fix items, which fleet-batch groups.
+  3. Every 300 s fleet-batch groups fix items and fleet-feed restocks the queue from the focus beans.
+  4. Ghost slot waiters (fleet-slot, parent init, cwd gone, > 10 min) are SIGTERMed and logged. Nothing else is killed.
+Only seats whose role is coder or reviewer are refilled; dedicated seats (DROVER_REFILL_DEDICATED) and seats on a dead
+harness (DROVER_REFILL_SKIP_HARNESSES: a harness whose quota is exhausted swallows queue items) are never sent work.
+Never sends faster than COOLDOWN per seat, never below MIN_FREE_GB of free disk. Reads only names/cwds, never argv.
+
+Liveness: each tick has a 600 s SIGALRM watchdog (a loop once went silent for 1h43m with no error and no restart) and a
+heartbeat line is logged every 10 ticks; fleet-cred-check treats a log older than 10 minutes as DEAD.
+
+  fleet-refill --once --dry-run     show decisions, change nothing
+  fleet-refill                      run forever
+Env: REFILL_POLL (60) REFILL_IDLE_POLLS (4) REFILL_COOLDOWN (900) REFILL_MIN_FREE_GB (30) REFILL_MAX_SENDS (4)
+     REFILL_MAX_WAITERS (8) REFILL_SOFT_POLLS (12) REFILL_HUNTS REFILL_FEED_EVERY (300) REFILL_TICK_LIMIT (600)
+"""
+import glob, hashlib, json, os, re, signal, subprocess, sys, time
+
+
+def drover_env():
+    """The same config every bash script sees: source drover-env (next to this file) and read it back."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    env = os.path.join(here, 'drover-env')
+    keys = ['DROVER_BIN', 'DROVER_HOME', 'DROVER_ROSTER', 'DROVER_BEAN_RE', 'FLEET_BRIEFS', 'FLEET_REPORTS', 'FLEET_REFILL_LOG',
+            'DROVER_REFILL_DEDICATED', 'DROVER_REFILL_SKIP_HARNESSES', 'DROVER_HUNT_AREAS']
+    out = subprocess.run(['bash', '-c', '. "$0"; for k in "$@"; do printf "%s=%s\\0" "$k" "${!k:-}"; done', env, *keys],
+                         capture_output=True, text=True, check=True).stdout
+    return dict(kv.split('=', 1) for kv in out.split('\0') if '=' in kv)
+
+
+E = drover_env()
+BIN = E['DROVER_BIN']
+QDIR = f"{E['FLEET_BRIEFS']}/queue"
+CLAIMED = f"{E['FLEET_BRIEFS']}/queue-claimed"
+STATE = f"{E['DROVER_HOME']}/refill/state.json"
+LOG = E['FLEET_REFILL_LOG']
+REPORTS = E['FLEET_REPORTS']
+BEAN_RE = E['DROVER_BEAN_RE']
+
+ROSTER = [p.split(':') for p in E['DROVER_ROSTER'].split() if ':' in p]
+DEDICATED = set(E['DROVER_REFILL_DEDICATED'].split())
+SKIP_HARNESS = set(E['DROVER_REFILL_SKIP_HARNESSES'].split())
+CODERS = [n for n, h in ROSTER if n.rsplit('-', 1)[-1] == 'coder' and n not in DEDICATED and h not in SKIP_HARNESS]
+REVIEWERS = [n for n, h in ROSTER if n.rsplit('-', 1)[-1] in ('reviewer', 'analyst') and n not in DEDICATED and h not in SKIP_HARNESS]
+SEATS = CODERS + REVIEWERS
+SEATS += [x for x in os.environ.get('REFILL_EXTRA_SEATS', '').split(',') if x]   # test hook only
+
+POLL = int(os.environ.get('REFILL_POLL', '60'))
+IDLE_POLLS = int(os.environ.get('REFILL_IDLE_POLLS', '4'))
+COOLDOWN = int(os.environ.get('REFILL_COOLDOWN', '900'))
+MIN_FREE_GB = float(os.environ.get('REFILL_MIN_FREE_GB', '30'))      # a full disk once hung the machine: never send work below this
+MAX_SENDS = int(os.environ.get('REFILL_MAX_SENDS', '4'))
+MAX_WAITERS = int(os.environ.get('REFILL_MAX_WAITERS', '8'))         # more fleet-slot processes than this = the heavy lane is saturated
+SOFT_POLLS = int(os.environ.get('REFILL_SOFT_POLLS', '12'))          # a screen unchanged this long is idle even with a soft hint
+FEED_EVERY = int(os.environ.get('REFILL_FEED_EVERY', '300'))
+TICK_LIMIT = int(os.environ.get('REFILL_TICK_LIMIT', '600'))
+HARD = re.compile(r'esc to interrupt|esc interrupt|Working \(|\(\d+m \d+s|\(\d+s ', re.I)   # live work: timers and the interrupt hint
+SOFT = re.compile(r'\b[1-9]\d* (shell|shells|monitor|monitors|task|tasks)\b|background terminal|still running|ctrl\+b to run in background', re.I)   # a background job may still run
+ASSIGN_ITEM = re.compile(r'QUEUE \d*-?assign-(' + BEAN_RE + ')')
+
+AREAS = [a.strip() for a in E['DROVER_HUNT_AREAS'].split(';') if a.strip()]
+CLASSES = [('cross-tenant leakage', 'data of one customer read through a shared path, or an id resolved to a shared account'),
+           ('gate that passes when evidence is missing', 'a fail-open guard in an approval, delivery or send path'),
+           ('test that cannot fail', 'a partial mock, a self-grading constant or a source-text assertion; prove it with a mutation that leaves the suite green'),
+           ('number with no basis', 'a percentage or delta shown to a user with no stated comparison window or sample size'),
+           ('swallowed failure counted as success', 'catch-and-continue while the caller records the run as succeeded'),
+           ('absence reported as a value', 'null/NaN/undefined/0 shipped as a real figure, or a stringified null')]
+
+
+def log(msg):
+    line = f"{time.strftime('%F %T')} {msg}"
+    os.makedirs(os.path.dirname(LOG), exist_ok=True)
+    with open(LOG, 'a') as f:
+        f.write(line + '\n')
+    print(line, flush=True)
+
+
+def run(cmd, timeout=20):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except Exception as e:
+        return subprocess.CompletedProcess(cmd, 1, '', str(e))
+
+
+def load():
+    try:
+        return json.load(open(STATE))
+    except Exception:
+        return {'seats': {}, 'hunt': 0}
+
+
+def save(s):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    json.dump(s, open(STATE + '.tmp', 'w'))
+    os.replace(STATE + '.tmp', STATE)
+
+
+def seat_view(name):
+    g = run(['herdr', 'agent', 'get', name])
+    if g.returncode != 0:
+        return None
+    try:
+        status = json.loads(g.stdout)['result']['agent']['agent_status']
+    except Exception:
+        return None
+    scr = run(['herdr', 'agent', 'read', name, '--source', 'visible', '--lines', '40']).stdout
+    return status, scr
+
+
+def next_item(kind, seat, st, light=False):
+    os.makedirs(QDIR, exist_ok=True)
+    os.makedirs(CLAIMED, exist_ok=True)
+    for p in ([] if light else sorted(glob.glob(f'{QDIR}/*.txt'))):
+        try:
+            text = open(p).read()
+        except Exception:
+            continue
+        m = re.match(r'kind:\s*(coder|reviewer|any)\s*\n', text)
+        k = m.group(1) if m else 'any'
+        if k not in ('any', kind):
+            continue
+        dst = f'{CLAIMED}/{os.path.basename(p)}'
+        try:
+            os.rename(p, dst)                       # atomic claim: the loser gets FileNotFoundError
+        except Exception:
+            continue
+        body = text[m.end():] if m else text
+        return f'QUEUE {os.path.basename(p)}', body.strip()
+    if os.environ.get('REFILL_HUNTS') != '1' or not AREAS:      # hunts are opt-in: no new work is generated by default
+        return None, None
+    i = st.get('hunt', 0)
+    st['hunt'] = i + 1
+    area = AREAS[i % len(AREAS)]
+    cls, what = CLASSES[(i // len(AREAS) + i) % len(CLASSES)]
+    n = i + 1
+    rep = f'{REPORTS}/{seat}-standing-{n}-{time.strftime("%Y%m%d")}.md'
+    qfix = f'{QDIR}/fix-{seat}-standing-{n}-<k>.txt'
+    body = (f'STANDING HUNT #{n}: class "{cls}" ({what}) in the area "{area}". PROOF OR NOTHING: each finding = file:line + the triggering input + the '
+            f'wrong output, shown by running the real code in a throwaway copy (deleted after). An honest empty hunt is a valid result, say so. Read-only; do not fix. '
+            f'Report to {rep} (first line HUNT + count of proven findings). For EACH proven finding also write one fix item file {qfix} '
+            f'(k = 1,2,...) whose content is exactly: "kind: coder" newline, then one paragraph: the finding with file:line, the trigger, the wrong output, '
+            f'the root-cause fix wanted, and "Fix at the shared function with a test that fails before and passes after (revert-test-restore on a per-file copy); '
+            f'fresh worktree off origin/main; push only your own commits through the normal hook; heavy runs inside fleet-slot; no new beans; report then fleet-done." '
+            f'Then fleet-done. Do not wait for the lead.')
+    if cls == 'test that cannot fail':   # vacuous tests are removed, not strengthened
+        body = body.replace('the root-cause fix wanted, and "Fix at the shared function with a test that fails before and passes after (revert-test-restore on a per-file copy); ',
+                            'the fix wanted is to DELETE the vacuous test or assertion (tests that cannot fail are removed, not strengthened), and "Delete ONLY that test or assertion, never other tests in the file. '
+                            'First prove it cannot fail: mutate the code it claims to cover on a per-file copy and show the suite stays green, and paste that. After deleting, the file still compiles and its remaining tests pass; ')
+    if light:
+        body += (' THE HEAVY TEST LANE IS SATURATED RIGHT NOW: do NOT run the test runner, the type checker or a build; probe with a small script '
+                 '(under 60 s) or by reading the code; if a proof needs a real test run, write the finding with the exact command and leave the heavy run to the fix item.')
+    return f'HUNT #{n} {cls} / {area}' + (' [light]' if light else ''), body
+
+
+def reap_ghosts(dry):
+    r = run(['pgrep', '-f', 'fleet-slot'])
+    for pid in [int(x) for x in r.stdout.split() if x.isdigit()]:
+        ps = run(['ps', '-o', 'ppid=,etime=', '-p', str(pid)]).stdout.split()
+        if len(ps) < 2 or ps[0] != '1':
+            continue
+        et = ps[1]
+        parts = re.split('[-:]', et)
+        mins = int(parts[-2]) + 60 * int(parts[-3] if len(parts) > 2 else 0) + 1440 * (int(parts[0]) if '-' in et else 0)
+        if mins < 10:
+            continue
+        cwd = [l[1:] for l in run(['lsof', '-a', '-p', str(pid), '-d', 'cwd', '-Fn']).stdout.splitlines() if l.startswith('n')]
+        if not cwd or os.path.isdir(cwd[0]):
+            continue                                   # cwd still exists: a live seat's own job, never touched
+        msg = f'GHOST fleet-slot waiter pid={pid} ppid=1 etime={et} cwd gone'
+        if dry:
+            log('DRY ' + msg)
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception as e:
+            log(f'{msg} kill failed: {e}')
+            continue
+        log('REAP ' + msg)
+
+
+def tick(dry):
+    st = load()
+    sends = 0
+    now = time.time()
+    free = os.statvfs(os.path.expanduser('~'))
+    free_gb = free.f_bavail * free.f_frsize / 2**30
+    if free_gb < MIN_FREE_GB:
+        log(f'DISK GUARD: only {free_gb:.1f} GB free (< {MIN_FREE_GB}): no new work sent')
+        return
+    r = run([f'{BIN}/fleet-batch'])                    # group fix items by area so one seat fixes, tests and pushes a whole group once
+    if r.returncode != 0:
+        log(f'fleet-batch failed rc={r.returncode}: {r.stderr.strip()[:150]}')
+    if now - st.get('feed', 0) > FEED_EVERY:           # nobody works when the lead is away: restock the queue from the focus beans
+        st['feed'] = now
+        r = run([f'{BIN}/fleet-feed'], timeout=150)
+        if r.stdout.strip():
+            log('fleet-feed: ' + r.stdout.strip().replace('\n', '; ')[:300])
+        if r.returncode != 0:
+            log(f'fleet-feed failed rc={r.returncode}: {r.stderr.strip()[:150]}')
+    waiters = len([x for x in run(['pgrep', '-f', 'fleet-slot']).stdout.split() if x.isdigit()])
+    light = waiters > MAX_WAITERS
+    if light:
+        log(f'backpressure: {waiters} fleet-slot processes (> {MAX_WAITERS}): light work only, no queue fix items')
+    for seat in SEATS:
+        v = seat_view(seat)
+        s = st['seats'].setdefault(seat, {'hash': '', 'same': 0, 'last_send': 0})
+        if v is None:
+            s['same'] = 0
+            continue
+        status, scr = v
+        h = hashlib.sha1(scr.encode()).hexdigest()
+        hard = bool(HARD.search(scr))
+        soft = bool(SOFT.search(scr))
+        s['same'] = s['same'] + 1 if (h == s['hash'] and not hard) else 0
+        s['hash'] = h
+        idle = status in ('done', 'idle') and not hard and s['same'] >= IDLE_POLLS and (not soft or s['same'] >= SOFT_POLLS)
+        if status == 'working' or hard:
+            s['same'] = 0
+        if not idle or sends >= MAX_SENDS or now - s['last_send'] < COOLDOWN:
+            continue
+        kind = 'coder' if seat in CODERS else 'reviewer'
+        what, body = next_item(kind, seat, st, light) if not dry else ('(dry) next item', '')
+        if what is None:
+            continue                                   # queue empty and hunts are off
+        if dry:
+            log(f'DRY would refill {seat} ({status}, unchanged {s["same"]} polls): {what}')
+            continue
+        body += (' CLEANUP: when this item is finished and pushed/landed, remove the fresh worktree YOU created: '
+                 'git worktree remove <path> (no --force; it refuses if anything is unsaved) and delete any scratch copy you made. Never leave a worktree behind.')
+        mb = ASSIGN_ITEM.match(what or '')
+        if mb:   # a bean slice item: go through fleet assign so the seat gets a clean branch off origin/main (fleet-prep) and the ledger/task file
+            r = run([f'{BIN}/fleet', 'assign', mb.group(1), seat, body], timeout=240)
+        else:
+            r = run([f'{BIN}/fleet', 'send', seat, body], timeout=60)
+        if r.returncode == 0:
+            s['last_send'] = now
+            s['same'] = 0
+            sends += 1
+            log(f'REFILL {seat} <- {what}')
+        else:
+            log(f'send to {seat} failed rc={r.returncode}: {(r.stdout + r.stderr).strip()[:150]}')
+    reap_ghosts(dry)
+    save(st)
+
+
+def main():
+    dry = '--dry-run' in sys.argv
+    once = '--once' in sys.argv
+    log(f'start poll={POLL}s idle_polls={IDLE_POLLS} cooldown={COOLDOWN}s dry={dry} seats={len(SEATS)}')
+
+    def _wd(signum, frame):
+        raise TimeoutError(f'tick watchdog: a tick ran longer than {TICK_LIMIT} s')
+    signal.signal(signal.SIGALRM, _wd)
+    n = 0
+    while True:
+        signal.alarm(TICK_LIMIT)    # no single tick may outlive this: a hung child once made the loop go silent for 1h43m
+        try:
+            tick(dry)
+        except BaseException as e:
+            log(f'tick error: {e!r}')
+        finally:
+            signal.alarm(0)
+        n += 1
+        if n % 10 == 0:
+            log(f'heartbeat: {n} ticks')
+        if once:
+            break
+        time.sleep(POLL)
+
+
+if __name__ == '__main__':
+    main()
