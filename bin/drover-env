@@ -106,6 +106,11 @@ drover_bean_ids(){
 #   drover_clone SRC DST          copy a tree as a copy-on-write clone where the filesystem has them: BSD `cp -c` is
 #                                 APFS clonefile; GNU `cp --reflink=auto` clones on btrfs/XFS/bcachefs and
 #                                 falls back to a full copy (ext4: real disk and time).
+#   drover_seed_dir SRC DST       give a gate worktree its own copy of a dependency tree (drover_clone). Next.js 16's
+#                                 Turbopack refuses a symlink that points out of the project root, so a symlinked
+#                                 node_modules failed `next build` on a green main. When the copy fails (no
+#                                 copy-on-write and a disk too small for the tree) the partial copy is removed and
+#                                 DST becomes a symlink to SRC.
 #   drover_date_parse FMT STR     STR (laid out as strftime FMT) -> epoch seconds; fields STR lacks come from now.
 #                                 GNU date ignores FMT and parses STR on its own; every FMT drover uses is one it reads.
 if stat -c %Y / >/dev/null 2>&1; then
@@ -120,6 +125,13 @@ if cp --version >/dev/null 2>&1; then
 else
   drover_clone(){ cp -Rc "$1" "$2"; }
 fi
+drover_seed_dir(){
+  [ -e "$2" ] || [ -L "$2" ] && return 0
+  [ -d "$1" ] || return 0
+  mkdir -p "$(dirname "$2")" 2>/dev/null
+  drover_clone "$1" "$2" 2>/dev/null && return 0
+  rm -rf "$2"; ln -s "$1" "$2" 2>/dev/null
+}
 if date -d @0 >/dev/null 2>&1; then
   drover_date_parse(){ date -d "$2" +%s; }
 else

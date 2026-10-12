@@ -5,7 +5,7 @@ status: todo
 type: bug
 priority: normal
 created_at: 2026-10-12T09:53:12Z
-updated_at: 2026-10-12T09:53:12Z
+updated_at: 2026-10-12T11:07:27Z
 ---
 
 fleet-verify-main (bin/fleet-verify-main:43-45) and fleet-land-bean (bin/fleet-land-bean:105-107) seed DROVER_CLONE_DIRS into the gate worktree with `ln -s "$REPO/$d" "$wt/$d"`. Seat worktrees use drover_clone (bin/fleet:475), a copy-on-write copy.
@@ -18,8 +18,8 @@ Seen 2026-10-12 on the panel2 project: the cumulative gate went RED on a green m
 
 Fix: seed the gate worktrees with drover_clone, the same as seats. Keep the symlink only as a fallback when drover_clone fails (no copy-on-write and a huge tree).
 
-- [ ] fleet-verify-main and fleet-land-bean use drover_clone for DROVER_CLONE_DIRS
-- [ ] a project with Turbopack passes the push gate without an npm ci in DROVER_TEST_ALL
-- [ ] README gate section says the gate worktree holds a copy, not a symlink
+- [x] fleet-verify-main and fleet-land-bean use drover_clone for DROVER_CLONE_DIRS
+- [x] a project with Turbopack passes the push gate without an npm ci in DROVER_TEST_ALL
+- [x] README gate section says the gate worktree holds a copy, not a symlink
 
 2026-10-12 16:15, panel2: the cumulative verify runs DROVER_BUILD (tsc) in the verify worktree before DROVER_TEST_ALL runs npm ci. The worktree shares the main checkout node_modules, so a bean that adds a package (panel2-33bs, basic-ftp) fails the push gate with TS2307 until someone runs npm ci in the main checkout. Fix idea: run the install step before the build, or install when package-lock.json differs from the checkout.

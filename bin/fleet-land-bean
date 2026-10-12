@@ -127,10 +127,9 @@ if [ "$tip" = "$base" ]; then   # every commit was already on main: nothing to l
 fi
 diffnames=$(WT diff --name-only ${DROVER_MAIN_BRANCH} "$tip")
 
-# a fresh worktree has no deps; symlink the repo's installed ones so a typecheck/test resolves imports
-for d in ${DROVER_CLONE_DIRS:-node_modules}; do
-  [ -e "$wt/$d" ] || { mkdir -p "$(dirname "$wt/$d")" 2>/dev/null; ln -s "$REPO/$d" "$wt/$d" 2>/dev/null; }
-done
+# a fresh worktree has no deps; copy the repo's installed ones in (drover_seed_dir: a copy, as seats get, since
+# Turbopack refuses a node_modules symlink that leaves the project root) so a typecheck/test resolves imports
+for d in ${DROVER_CLONE_DIRS:-node_modules}; do drover_seed_dir "$REPO/$d" "$wt/$d"; done
 
 changed_args=""
 changed_file="$STATE/land-$bean-changed.txt"

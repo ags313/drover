@@ -11,9 +11,10 @@ Repo: `$DROVER_REPO`. You run in your own worktree (`$DROVER_WORKTREES/fleet-<yo
    already exists). Never stage `.env*`.
 2. Bring or write the work. Existing commits elsewhere: cherry-pick the NON-merge commits that belong to
    the bean; resolve conflicts keeping main's newer behaviour AND the bean's fix.
-3. Dependencies missing? Symlink them in from `$DROVER_REPO` (`DROVER_CLONE_DIRS`, default
-   `node_modules`) — **never** `npm install`/`npm ci` (or your package manager's equivalent) through a
-   symlink; it corrupts the shared copy every other worktree depends on.
+3. Dependencies missing? Copy them in from `$DROVER_REPO` (`DROVER_CLONE_DIRS`, default `node_modules`):
+   `cp -R --reflink=auto` (`cp -Rc` on macOS), a copy-on-write clone where the filesystem has one. Not a
+   symlink: Turbopack fails `next build` on one that leaves the project root, and `npm install`/`npm ci`
+   through a symlink corrupts the shared copy every other worktree depends on.
 4. Test-first: a failing test for the defect, watch it fail, then fix. Verify:
    `${DROVER_BUILD:-the project build}` (exit 0)${DROVER_TEST:+ and `$DROVER_TEST`}, plus the bean's own
    touched suites.

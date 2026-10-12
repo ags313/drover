@@ -39,10 +39,9 @@ cleanup(){ git -C "$REPO" worktree remove --force "$wt" 2>/dev/null; rm -rf "$wt
 trap cleanup EXIT
 rm -rf "$wt"; mkdir -p "$(dirname "$wt")"
 git -C "$REPO" worktree add -q --detach "$wt" "$tip" || { echo "verify: worktree add failed"; exit 1; }
-# a fresh worktree has no deps; symlink the repo's installed ones (DROVER_CLONE_DIRS, relative paths)
-for d in ${DROVER_CLONE_DIRS:-node_modules}; do
-  [ -e "$wt/$d" ] || { mkdir -p "$(dirname "$wt/$d")" 2>/dev/null; ln -s "$REPO/$d" "$wt/$d" 2>/dev/null; }
-done
+# a fresh worktree has no deps; copy the repo's installed ones in (DROVER_CLONE_DIRS, relative paths). A copy,
+# not a symlink: Turbopack fails `next build` on a node_modules symlink that leaves the project root.
+for d in ${DROVER_CLONE_DIRS:-node_modules}; do drover_seed_dir "$REPO/$d" "$wt/$d"; done
 # warm an incremental build cache: copy DROVER_BUILD_CACHE paths in so a "cold" gate build starts warm
 # (e.g. tsc --incremental's .tsbuildinfo). A stale cache only recompiles the changed files — never wrong.
 for c in ${DROVER_BUILD_CACHE:-}; do
