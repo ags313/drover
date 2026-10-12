@@ -5,7 +5,7 @@ status: todo
 type: bug
 priority: high
 created_at: 2026-10-12T10:15:17Z
-updated_at: 2026-10-12T10:15:17Z
+updated_at: 2026-10-12T10:55:22Z
 ---
 
 In the drover project the seats are drover-claude-coder and drover-codex-reviewer and the bean prefix is drover-. Every fix-round follow-up fails:
@@ -19,9 +19,9 @@ Fix:
 2. check_beans also ignores any match that is a prefix of a roster seat name.
 3. Test: eval check with prefix x-, seat x-claude-coder, text "fleet-done x-claude-coder x-ab12": only x-ab12 is checked.
 
-- [ ] follow-ups dispatch in a project whose seat prefix equals the bean prefix
-- [ ] eval check covers the collision
-- [ ] drover-t59r's queued follow-up dispatches after the fix lands
+- [x] follow-ups dispatch in a project whose seat prefix equals the bean prefix
+- [x] eval check covers the collision
+- [x] drover-t59r's queued follow-up dispatches after the fix lands
 
 
 Hotfix 2026-10-12: DROVER_BEAN_RE now ends with \b (bin/drover-env). Follow-ups dispatch again in the drover and panel2 projects. Open: the seat-name guard in check_beans and the eval check.

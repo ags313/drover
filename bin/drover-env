@@ -82,6 +82,17 @@ fi
 DROVER_BEAN_PREFIX="${DROVER_BEAN_PREFIX:-bean-}"
 DROVER_BEAN_RE="${DROVER_BEAN_RE:-}"
 [ -n "$DROVER_BEAN_RE" ] || DROVER_BEAN_RE="${DROVER_BEAN_PREFIX}[a-z0-9]{4}\\b"   # \b: a seat name like panel2-claude-coder must not match as panel2-clau. Not inside ${:-}: its {4} closes the expansion early.
+# Bean ids cited in $1, one per line, first occurrence first. A seat named <prefix>-<role> shares the bean
+# prefix (install.sh --project NAME seeds NAME-<role> seats), and \b still lets "drover-grok-coder" yield
+# "drover-grok" and "drover-lead" match whole: a match that begins a seat name is that seat, not a bean.
+# $2 = seats as "name[:kind] ..." (default: DROVER_ROSTER and DROVER_LEAD_SEATS).
+drover_bean_ids(){
+  local id s
+  for id in $(printf '%s' "$1" | grep -oE "$DROVER_BEAN_RE" | awk '!seen[$0]++'); do
+    for s in ${2-$DROVER_ROSTER $DROVER_LEAD_SEATS}; do case "${s%%:*}" in "$id"*) continue 2 ;; esac; done
+    printf '%s\n' "$id"
+  done
+}
 
 # stat and date take different flags in GNU coreutils (Linux, NixOS, or a Mac with coreutils first on PATH)
 # and BSD (stock macOS). Probe the binaries, not the OS. On GNU `stat -f %m` is a filesystem query: it prints

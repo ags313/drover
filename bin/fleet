@@ -600,7 +600,7 @@ VOICE='Voice: blunt, like a senior engineer in a code review. Verdict first, evi
 check_beans() {
   local text=$1 ids id missing=""
   # grep exits 1 on no match; under set -e that must not kill send/followup.
-  ids=$(printf '%s' "$text" | grep -oE "$DROVER_BEAN_RE" | sort -u || true)
+  ids=$(drover_bean_ids "$text" "$FLEET $DROVER_LEAD_SEATS")
   [ -n "$ids" ] || return 0
   local onmain; onmain=$(git -C "$FLEET_ROOT" ls-tree -r --name-only ${DROVER_MAIN_BRANCH} -- .beans/ 2>/dev/null || true)
   for id in $ids; do
@@ -1080,7 +1080,7 @@ case "${1:-}" in
   send)
     kind=$(kind_of "$2") || exit 2
     check_beans "${3:-}"
-    bean=$(printf '%s' "${3:-}" | grep -oE "$DROVER_BEAN_RE" | head -1 || true)
+    bean=$(drover_bean_ids "${3:-}" "$FLEET $DROVER_LEAD_SEATS" | head -1 || true)
     log assign "$2" "$kind" "$(role_of "$2")" "${bean:--}" "send: ${3:0:60}"
     herdr agent prompt "$2" "$3" --wait --until working --until done --until blocked | jq -r '"\(.result.agent.name): \(.result.agent.agent_status)"'
     ;;
