@@ -107,12 +107,16 @@ for d in ${DROVER_CLONE_DIRS:-node_modules}; do
 done
 
 changed_args=""
-run_gate(){  # $1=cmd  $2=log-tag  $3=stall-seconds ; runs in $wt with $CHANGED exported. Reads the LOG:
+changed_file="$STATE/land-$bean-changed.txt"
+# Newline path list for gates. Do NOT put thousands of paths into CHANGED= env: Linux
+# MAX_ARG_STRLEN (128KiB) aborts exec with "Argument list too long" (forum-1f42: 2405 files).
+printf '%s\n' "$diffnames" > "$changed_file"
+run_gate(){  # $1=cmd  $2=log-tag  $3=stall-seconds ; runs in $wt with CHANGED_FILE (+ small CHANGED). Reads the LOG:
              # kills ONLY after $3s with NO new output (a genuine hang), never on total elapsed time. A
              # synthetic wall-clock cap SIGKILLs slow-but-healthy gates under load and false-fails good
              # beans (2026-09-21). The gate command must emit progress (jest prints PASS/FAIL per suite).
   local logf="$STATE/land-$bean-$2.log"
-  ( cd "$wt" && CHANGED="$changed_args" sh -c "$1" ) >"$logf" 2>&1 &
+  ( cd "$wt" && CHANGED_FILE="$changed_file" CHANGED="$changed_args" sh -c "$1" ) >"$logf" 2>&1 &
   local p=$! last=-1 quiet=0 sz
   while kill -0 "$p" 2>/dev/null; do
     sleep 10
@@ -129,7 +133,12 @@ if [ -n "${DROVER_TYPECHECK:-}" ]; then
   [ "$grc" -eq 0 ]   || { cleanup; flag "typecheck failed on cherry-pick — manual land ($STATE/land-$bean-tc.log)"; exit 1; }
 fi
 if [ -n "${DROVER_TEST_CHANGED:-}" ]; then
-  changed_args=$(printf '%s\n' "$diffnames" | tr '\n' ' ')
+  # Keep CHANGED for small diffs / older gate scripts; omit when it would exceed MAX_ARG_STRLEN.
+  if [ "$(wc -c < "$changed_file")" -lt 100000 ]; then
+    changed_args=$(tr '\n' ' ' < "$changed_file")
+  else
+    changed_args=""
+  fi
   run_gate "$DROVER_TEST_CHANGED" test "${DROVER_GATE_STALL:-300}"; grc=$?
   [ "$grc" -eq 124 ] && { cleanup; flag "related tests STALLED — no output ${DROVER_GATE_STALL:-300}s (hung, not a clock) — manual land ($STATE/land-$bean-test.log)"; exit 1; }
   [ "$grc" -eq 0 ]   || { cleanup; flag "$DROVER_LAND_TESTS on cherry-pick — manual land ($STATE/land-$bean-test.log)"; exit 1; }
