@@ -21,6 +21,7 @@
 #   fleet-watch once            one tick, then exit
 #   fleet-watch route-land      hand needs-land beans flagged for a conflict or failed tests to a live coder, then exit
 #   fleet-watch top-up          queue ready beans from the board (the tick's top-up step), then exit
+#   fleet-watch land-lane       one auto_push then one auto_land pass (DROVER_AUTOLAND lane), wait for both, exit
 #   fleet-watch enqueue <bean>  add a bean to the global queue
 #   fleet-watch queue           show the queue
 set -uo pipefail
@@ -69,14 +70,21 @@ Queue up to 20 ready beans from the board when the queue is empty (the tick's to
 on the integration branch and the WIP cap still apply), then exit. Mutating.
 H
       ;;
+    land-lane) cat <<'H'
+fleet-watch land-lane
+Run one auto_push pass (full-suite gate, then push main) and one auto_land pass (land the newest approved bean),
+wait for both, then exit. The pass the landing lane runs every 60s under DROVER_AUTOLAND=1. Clears a push lock
+whose owner is dead. Mutating.
+H
+      ;;
     once) cat <<'H'
 fleet-watch once
 Run one watcher tick (dialogs, budget, inbox, refill), then exit. Mutating.
 --dry-run  print preview; do not tick
 H
       ;;
-    run) sed -n '2,23p' "$0" ;;
-    *) sed -n '2,23p' "$0" ;;
+    run) sed -n '2,26p' "$0" ;;
+    *) sed -n '2,26p' "$0" ;;
   esac
 }
 
@@ -770,7 +778,9 @@ auto_land(){
   # A push is mid-flight (its gate runs against this checkout): don't move main under it. auto_push runs
   # FIRST in the tick and skips while a land holds .land-lock; with lands running back to back the old
   # order (land, then push) starved the deploy — 62 commits sat unpushed (2026-09-22).
-  [ -d "$STATE/.push-lock" ] && return 0
+  # A DEAD owner's lock is cleared here, not only in auto_push: auto_push returns early with nothing to push,
+  # so a stale lock with main level with origin blocked every land, forever (panel2, 2026-10-12).
+  push_lock_held && return 0
   [ "$(cd "$REPO" && git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "${DROVER_MAIN_BRANCH}" ] || return 0
   # BOUNDED: exactly ONE fleet-land-bean per tick under a lock (stale-reclaimed) so two never overlap
   # and thrash the box. Newest approved first.
@@ -828,6 +838,22 @@ load_ok(){ local free procs
   procs=$(ps -A -o pid=,ppid= | awk '$1 != 2 && $2 != 2' | wc -l | tr -d ' ')
   if [ "${free:-0}" -lt "${FLEET_MIN_FREE_GB:-16}" ] || [ "${procs:-0}" -gt "${FLEET_MAX_PROCS:-1500}" ]; then
     log "LOAD-GUARD: not starting heavy work (free ${free}GB < ${FLEET_MIN_FREE_GB:-16} or procs ${procs} > ${FLEET_MAX_PROCS:-1500})"; return 1; fi; return 0; }
+# 0 = a live push holds $STATE/.push-lock. A lock whose owner is dead is stale NOW, whatever its age: a
+# watcher restart kills the push subshell mid-flight and an age-only backstop left the lock blocking every
+# push for 30+ minutes before it aged out. A LIVE owner is never taken over just because it ran long — a
+# full-suite verify at load runs 12m+, and a too-short age backstop stole the lock mid-verify and started a
+# second, concurrent push. Check the owner's pid first; age is only the backstop for a lock nobody is
+# holding (crash before the pid file was even written). A stale lock is removed and 1 returned.
+push_lock_held(){
+  local PK="$STATE/.push-lock" owner age
+  [ -d "$PK" ] || return 1
+  owner=$(cat "$PK/pid" 2>/dev/null)
+  age=$(( $(date +%s) - $(drover_mtime "$PK" 2>/dev/null || echo 0) ))
+  if { [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; } || { [ -z "$owner" ] && [ "$age" -gt 1800 ]; }; then
+    rm -rf "$PK"; log "AUTO-PUSH: cleared stale push lock (owner ${owner:-unknown} gone, age ${age}s)"; return 1
+  fi
+  return 0
+}
 # Exponential backoff between failed gate passes: $STATE/push-backoff = "<fails> <not-before-epoch>".
 # 240s, 480s, ... capped at 3600s; a green or already-pushed pass clears it.
 backoff_wait(){ local n nb; read -r n nb < "$STATE/push-backoff" 2>/dev/null || return 1; [ "$(date +%s)" -lt "${nb:-0}" ]; }
@@ -844,19 +870,8 @@ auto_push(){
   local ahead; ahead=$(cd "$REPO" && git rev-list --count ${DROVER_UPSTREAM}..HEAD 2>/dev/null)
   [ "${ahead:-0}" -gt 0 ] || return 0
   local PK="$STATE/.push-lock"
-  if ! mkdir "$PK" 2>/dev/null; then
-    # A lock whose owner is dead is stale NOW, whatever its age: a watcher restart kills the push
-    # subshell mid-flight and an age-only backstop left the lock blocking every push for 30+ minutes
-    # before it aged out. A LIVE owner is never taken over just because it ran long — a full-suite
-    # verify at load runs 12m+, and a too-short age backstop stole the lock mid-verify and started a
-    # second, concurrent push. Check the owner's pid first; age is only the backstop for a lock
-    # nobody is holding (crash before the pid file was even written).
-    local owner; owner=$(cat "$PK/pid" 2>/dev/null)
-    local age=$(( $(date +%s) - $(drover_mtime "$PK" 2>/dev/null || echo 0) ))
-    if { [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; } || { [ -z "$owner" ] && [ "$age" -gt 1800 ]; }; then
-      rm -rf "$PK"; mkdir "$PK" 2>/dev/null || return 0; log "AUTO-PUSH: took over stale push lock (owner ${owner:-unknown} gone, age ${age}s)"
-    else return 0; fi
-  fi
+  push_lock_held && return 0
+  mkdir "$PK" 2>/dev/null || return 0
   ( sh -c 'echo $PPID' > "$PK/pid"; cd "$REPO"
     # The gate is a heavy run: it takes the push slot, so it never stacks on top of other suites.
     "$DROVER_BIN"/fleet-slot run --push -- "$DROVER_BIN"/fleet-verify-main ${DROVER_MAIN_BRANCH} >"$STATE/auto-push-verify.log" 2>&1; vrc=$?
@@ -878,7 +893,9 @@ auto_push(){
       echo "$(date '+%F %H:%M') auto_push: cumulative full-suite RED (rc=$vrc, $ahead ahead) — see $STATE/auto-push-verify.log" > "$STATE/land-paused"
       log "AUTO-PUSH BLOCKED: cumulative full-suite RED (rc=$vrc, $ahead ahead) — landing PAUSED for triage ($STATE/auto-push-verify.log; rm state/land-paused after fix)"
     fi
-    rmdir "$PK" 2>/dev/null ) &
+    # rm -rf, not rmdir: the lock holds the pid file, so rmdir always failed and every push left its lock
+    # behind until the next push took it over; auto_land skipped every tick in between.
+    rm -rf "$PK" ) &
 }
 
 # Time every step; a slow step delays EVERY seat's next assignment (measured: ticks of 3-6 min, a DONE
@@ -923,6 +940,7 @@ observe_tick(){
 if [ "${1:-run}" = once ]; then tick; exit 0; fi
 if [ "${1:-run}" = route-land ]; then route_land_conflicts; exit 0; fi
 if [ "${1:-run}" = top-up ]; then top_up_queue; exit 0; fi
+if [ "${1:-run}" = land-lane ]; then auto_push; wait; auto_land; wait; exit 0; fi
 log "fleet-watch started (tick ${TICK}s)"
 # Landing lane on its own 60s cadence, decoupled from the full tick: when the tick itself grows long
 # (a slow drain_inbox or retry_reviews pass), approved beans should not wait behind it. auto_push/
