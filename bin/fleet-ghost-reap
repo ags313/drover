@@ -64,7 +64,7 @@ def sh(*a):
 # doing nothing.
 q = sh('beans', 'query', '--json', '{ beans { id type status title updatedAt children { status } } }')
 try:
-    board = json.loads(q.stdout or '{}').get('beans', []) if q.returncode == 0 else []
+    board = (json.loads(q.stdout or '{}') or {}).get('beans') or [] if q.returncode == 0 else []   # null is empty
 except ValueError:
     board = []
 if not board:

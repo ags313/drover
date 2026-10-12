@@ -12,6 +12,7 @@
 #                        flag, or a hand-off that cannot be written -> kept
 #   fleet-budget         two cursor seats -> a `cursor 2` row; the grok row stays as it was
 #   fleet rules          a fresh install would write cursor -> fires; right after install -> quiet
+#   top-up               empty board (beans prints null) -> no stderr, nothing queued; one ready bean -> queued
 # No network, no keys. Exit 1 on the first wrong answer.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")/../bin" && pwd)"
@@ -144,5 +145,17 @@ grep -q '"host": "cursor"' "$FLEET_SKILLS/cursor/plugin.json" 2>/dev/null && [ -
   && ok 'rules installs cursor/plugin.json with fleet-peers' || bad 'rules installed no cursor manifest'
 out=$("$BIN"/fleet rules --dry-run 2>/dev/null)
 grep -q '^host=' <<<"$out" && bad 'rules dry-run reports a diff right after install' || ok 'rules dry-run quiet after install'
+# --- top-up on an empty board: `beans list --json --ready` prints null, not [] ------------------------------
+# A copy of fleet-watch beside a stub `fleet` runs the tick's top-up step against a fresh beans project. Empty
+# board -> no stderr, nothing queued. One ready bean -> queued.
+mkdir -p "$T/qbin"; cp "$BIN"/fleet-watch "$BIN"/drover-env "$T/qbin/"
+printf '#!/bin/sh\n[ "$1" = status ] && printf "NAME KIND STATE\\n"\nexit 0\n' > "$T/qbin/fleet"; chmod +x "$T/qbin/fleet"
+git init -q -b main "$T/eb"; ( cd "$T/eb" && git config user.email e@x.invalid && git config user.name e && beans init >/dev/null && git add -A && git commit -qm init )
+top_up(){ ( cd "$T/eb" && env -u DROVER_PROJECT DROVER_REPO="$T/eb" FLEET_QUEUE="$T/q" "$T/qbin/fleet-watch" top-up >/dev/null 2>"$T/q.err" ); }
+top_up; rc=$?
+[ "$rc" = 0 ] && [ ! -s "$T/q.err" ] && [ -z "$(ls "$T/q" 2>/dev/null)" ] \
+  && ok 'top-up on an empty board: no stderr, nothing queued' || bad "top-up on an empty board (rc=$rc): $(head -c 300 "$T/q.err")"
+( cd "$T/eb" && beans create 'one ready bean' -t task -s todo >/dev/null && git add -A && git commit -qm bean )
+top_up; [ "$(ls "$T/q" 2>/dev/null | grep -c .)" = 1 ] && ok 'top-up queues a ready bean' || bad "top-up queued: $(ls "$T/q" 2>/dev/null | tr '\n' ' ') err: $(head -c 300 "$T/q.err")"
 
 [ "$fail" = 0 ] && echo 'all checker cases pass' || { echo 'checker cases FAILED'; exit 1; }

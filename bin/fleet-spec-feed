@@ -51,7 +51,7 @@ def sh(*a):
 def query(q):
     r = sh('beans', 'query', '--json', q)
     try:
-        return json.loads(r.stdout or '{}').get('beans', []) if r.returncode == 0 else [], r
+        return (json.loads(r.stdout or '{}') or {}).get('beans') or [] if r.returncode == 0 else [], r   # null is empty
     except ValueError:
         return [], r
 
