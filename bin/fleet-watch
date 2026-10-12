@@ -800,12 +800,14 @@ route_land_conflicts(){
     else best=999; for n in $live; do printf '%s' " $BROKE " | grep -q " $(kind_of "$n") " && continue
            bn=0; [ -f "$STATE/followups/$n" ] && bn=$(wc -l < "$STATE/followups/$n"); [ "${bn:-0}" -lt "$best" ] && best=${bn:-0} && seat=$n; done; fi
     [ -n "$seat" ] || { log "LAND-ROUTE $b: no live coder — flag kept"; continue; }
-    mkdir -p "$FLEET_BRIEFS" "$STATE/followups"
+    mkdir -p "$FLEET_BRIEFS" "$STATE/followups" "$STATE/owner"   # `route-land` runs without a tick's owner_sync
     bt="${DROVER_BUILD:-run the project build}"; [ -n "${DROVER_TEST_CHANGED:-}" ] && bt="$bt; $DROVER_TEST_CHANGED"
     printf '# Landing fix round: %s\n\nApproved, but it does not land on current '"${DROVER_MAIN_BRANCH}"':\n\n    %s\n\nPrevious owner: %s. It is yours now.\n\n1. Branch fleet/%s-%s from current '"${DROVER_MAIN_BRANCH}"'; cherry-pick this bean'"'"'s commits (git log '"${DROVER_MAIN_BRANCH}"'..<old branch> --grep %s); resolve there. Never hand-merge a generated file (see DROVER_GENERATED): take '"${DROVER_MAIN_BRANCH}"''"'"'s copy and regenerate.\n2. If '"${DROVER_MAIN_BRANCH}"' already has the work, say so and announce DONE "already on '"${DROVER_MAIN_BRANCH}"'".\n3. %s\n4. Report REBASED/VERIFIED/DONE with SHAs; fleet-done %s %s DONE "<one line>" <report>\n' \
-      "$b" "$reason" "${owner:-none}" "$seat" "$b" "$b" "$bt" "$seat" "$b" > "$FLEET_BRIEFS/land-$b.md"
-    grep -q -- "^$b	" "$STATE/followups/$seat" 2>/dev/null || printf '%s\t%s\n' "$b" "$FLEET_BRIEFS/land-$b.md" >> "$STATE/followups/$seat"   # never queue the same bean twice
-    echo "$seat" > "$STATE/owner/$b"; rm -f "$f" "$STATE/approved/$b"
+      "$b" "$reason" "${owner:-none}" "$seat" "$b" "$b" "$bt" "$seat" "$b" > "$FLEET_BRIEFS/land-$b.md" \
+    && echo "$seat" > "$STATE/owner/$b" \
+    && { grep -q -- "^$b	" "$STATE/followups/$seat" 2>/dev/null || printf '%s\t%s\n' "$b" "$FLEET_BRIEFS/land-$b.md" >> "$STATE/followups/$seat"; } \
+    || { log "LAND-ROUTE $b: could not record the hand-off to $seat — flag kept"; continue; }   # never clear a flag nobody owns
+    rm -f "$f" "$STATE/approved/$b"
     log "LAND-ROUTE $b -> $seat (was ${owner:-none}): ${reason:0:80}"
   done
 }
