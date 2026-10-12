@@ -1,11 +1,11 @@
 ---
 # drover-13ly
 title: 'fleet-watch auto-push: push after a batch of lands, not after every land'
-status: todo
+status: in-progress
 type: feature
 priority: normal
 created_at: 2026-10-12T19:41:45Z
-updated_at: 2026-10-12T19:41:45Z
+updated_at: 2026-10-12T20:31:13Z
 ---
 
 Today `auto_push` in `bin/fleet-watch` pushes as soon as local main is ahead of origin, so every landed bean is one push and one CI run. panel2 made 42 pushes on 2026-10-12. The user asked for a push after a batch has accumulated.
