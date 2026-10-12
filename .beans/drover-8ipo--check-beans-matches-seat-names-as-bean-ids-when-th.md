@@ -1,11 +1,11 @@
 ---
 # drover-8ipo
 title: check_beans matches seat names as bean ids when the seat prefix equals the bean prefix
-status: todo
+status: completed
 type: bug
 priority: high
 created_at: 2026-10-12T10:15:17Z
-updated_at: 2026-10-12T10:55:22Z
+updated_at: 2026-10-12T19:40:44Z
 ---
 
 In the drover project the seats are drover-claude-coder and drover-codex-reviewer and the bean prefix is drover-. Every fix-round follow-up fails:
