@@ -145,10 +145,10 @@ retry_progress(){
 }
 # Never persist the pane, environment or native arguments. Emit only safe roster
 # identity/state/verdict fields, followed by the compatible human summaries.
-oc_agents=0;oc_broke=0;oc_cap=0;oc_unknown=0;cx_agents=0;cx_broke=0;cl_agents=0;cl_broke=0;cl_native_cap=0;cl_native_unknown=0;gk=0;ag=0;cr_dead="";silent=""
+oc_agents=0;oc_broke=0;oc_cap=0;oc_unknown=0;cx_agents=0;cx_broke=0;cl_agents=0;cl_broke=0;cl_native_cap=0;cl_native_unknown=0;gk=0;ag=0;cu=0;cr_dead="";silent=""
 while read -r a kind st; do
  [ -n "${a:-}" ] || continue
- case "$kind" in opencode)oc_agents=$((oc_agents+1));;codex)cx_agents=$((cx_agents+1));;claude)cl_agents=$((cl_agents+1));;grok)gk=$((gk+1));;agy)ag=$((ag+1));;esac
+ case "$kind" in opencode)oc_agents=$((oc_agents+1));;codex)cx_agents=$((cx_agents+1));;claude)cl_agents=$((cl_agents+1));;grok)gk=$((gk+1));;agy)ag=$((ag+1));;cursor)cu=$((cu+1));;esac
  verdict=OK;pane="";tailpane="";read_rc=0
  if [ "$status_valid" -eq 0 ] || [ "$st" = MISSING ] || [ "$st" = unknown ]; then
   verdict=UNKNOWN
@@ -212,6 +212,6 @@ elif [ "$cl_native_cap" -gt 0 ];then printf 'claude     %-6s NATIVE QUOTA (%s af
 elif [ "$cl_native_unknown" -eq 0 ];then printf 'claude     %-6s subscription\n' "$cl_agents";fi
 if [ "$cl_native_unknown" -gt 0 ];then printf 'claude     %-6s UNKNOWN (%s native quota seats pending inspection)\n' "$cl_agents" "$cl_native_unknown";fi
 if [ -n "$cr_dead" ];then printf 'CREDITS    %-6s OUT OF USAGE CREDITS:%s\n' "$(printf '%s' "$cr_dead" | wc -w | tr -d ' ')" "$cr_dead";fi
-printf 'grok       %-6s subscription\nagy        %-6s subscription\n' "$gk" "$ag"
+printf 'grok       %-6s subscription\nagy        %-6s subscription\ncursor     %-6s subscription\n' "$gk" "$ag" "$cu"
 printf '\nFinished/idle seats (status only; report presence not checked):\n'
 for a in $silent;do printf '  %s\n' "$a";done

@@ -10,6 +10,7 @@
 #   fleet-slot           re-entry under FLEET_SLOT_HELD does not wait; a held general slot blocks a second run
 #   route-land           fleet-land-bean's own conflict flag -> routed to a live coder, owner recorded; an env-failure
 #                        flag, or a hand-off that cannot be written -> kept
+#   fleet-budget         two cursor seats -> a `cursor 2` row; the grok row stays as it was
 # No network, no keys. Exit 1 on the first wrong answer.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")/../bin" && pwd)"
@@ -119,5 +120,19 @@ FLEET_BRIEFS="$T/home/briefs" "$T/wbin/fleet-watch" route-land >/dev/null 2>&1
 chmod 755 "$T/home/briefs"
 [ -e "$FLEET_STATE/needs-land/bean-ro" ] && [ ! -e "$FLEET_STATE/owner/bean-ro" ] && ! grep -q '^bean-ro	' "$FLEET_STATE/followups/claude-coder" \
   && ok 'route-land keeps the flag when the hand-off cannot be written' || bad 'route-land cleared a flag it could not hand off'
+# --- fleet-budget: every harness the row filter accepts gets a row -------------------------------------------
+# A copy of fleet-budget beside a stub `fleet` (DROVER_BIN is the script's own dir): two cursor seats, one grok.
+mkdir -p "$T/bbin"; cp "$BIN"/fleet-budget "$BIN"/drover-env "$T/bbin/"
+cat > "$T/bbin/fleet" <<'STUB'
+#!/usr/bin/env bash
+case $1 in
+  status) printf 'NAME KIND STATE\ncursor-coder cursor idle\ncursor-reviewer cursor MISSING\ngrok-coder grok idle\n'; exit 1 ;;
+  read) echo 'ready' ;;
+esac
+STUB
+chmod +x "$T/bbin/fleet"
+out=$("$T/bbin/fleet-budget" 2>/dev/null)
+grep -qE '^cursor +2 +subscription$' <<<"$out" && ok 'budget counts cursor seats' || bad "budget cursor row: $(grep '^cursor' <<<"$out" || echo none)"
+grep -qE '^grok +1 +subscription$' <<<"$out" && ok 'budget grok row unchanged' || bad "budget grok row: $(grep '^grok' <<<"$out" || echo none)"
 
 [ "$fail" = 0 ] && echo 'all checker cases pass' || { echo 'checker cases FAILED'; exit 1; }
