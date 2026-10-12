@@ -1,11 +1,11 @@
 ---
 # drover-p82p
 title: Gate worktrees symlink node_modules; Turbopack refuses a symlink outside the project root
-status: todo
+status: completed
 type: bug
 priority: normal
 created_at: 2026-10-12T09:53:12Z
-updated_at: 2026-10-12T11:07:27Z
+updated_at: 2026-10-12T19:41:45Z
 ---
 
 fleet-verify-main (bin/fleet-verify-main:43-45) and fleet-land-bean (bin/fleet-land-bean:105-107) seed DROVER_CLONE_DIRS into the gate worktree with `ln -s "$REPO/$d" "$wt/$d"`. Seat worktrees use drover_clone (bin/fleet:475), a copy-on-write copy.
