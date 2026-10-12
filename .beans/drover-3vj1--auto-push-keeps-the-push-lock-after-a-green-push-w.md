@@ -1,11 +1,11 @@
 ---
 # drover-3vj1
 title: auto_push keeps the push lock after a green push when it took the lock over
-status: todo
+status: completed
 type: bug
 priority: high
 created_at: 2026-10-12T13:04:29Z
-updated_at: 2026-10-12T19:41:10Z
+updated_at: 2026-10-12T20:46:37Z
 ---
 
 panel2 watcher log (~/.local/share/drover/projects/panel2/logs/fleet-watch.out), 2026-10-12:
