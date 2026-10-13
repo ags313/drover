@@ -1,11 +1,11 @@
 ---
 # drover-ptct
 title: 'Port fleet-prep from upstream: park leftover work, resume or cut the bean branch before a brief'
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-10-13T21:08:07Z
-updated_at: 2026-10-13T21:14:07Z
+updated_at: 2026-10-13T21:24:27Z
 ---
 
 Port `bin/fleet-prep` from upstream (remote `origin` = andrebrov/drover, commit e6d9d54 "Port 2026-10-12 fleet changes"), and its hook in `fleet assign` (the `bin/fleet` hunk of that commit). Nothing else from that commit.
