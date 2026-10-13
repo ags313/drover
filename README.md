@@ -264,6 +264,42 @@ or `dev.drover.fleet-watch.forum` (launchd). The spend caps (`~/.config/drover/c
 one budget. `fleet stale` reports every pane in herdr, so each project's instance reports the same table.
 Without `--project`, drover is the single-project install it always was.
 
+### Local model seat (ollama through opencode)
+
+A local model can join as a coder for simple beans that the lead picks for it. opencode reaches ollama through
+an OpenAI-compatible provider in `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+"provider": {
+  "ollama": {
+    "npm": "@ai-sdk/openai-compatible",
+    "name": "Ollama (local)",
+    "options": { "baseURL": "http://localhost:11434/v1" },
+    "models": { "qwen3-coder-next:q4_K_M": { "name": "qwen3-coder-next q4_K_M (local)" } }
+  }
+}
+```
+
+Check it with `opencode run --model ollama/qwen3-coder-next:q4_K_M "say hi"`. Then, in the drover config:
+
+```bash
+DROVER_ROSTER="${DROVER_ROSTER:-claude-coder:claude opencode-coder:opencode qwen-coder:opencode codex-reviewer:codex}"
+FLEET_MODEL_qwen_coder="${FLEET_MODEL_qwen_coder:-ollama/qwen3-coder-next:q4_K_M}"   # this seat only
+DROVER_MANUAL_SEATS="${DROVER_MANUAL_SEATS:-qwen-coder}"                            # lead-only
+```
+
+`fleet up` spawns the seat with `--model ollama/qwen3-coder-next:q4_K_M`. `FLEET_MODEL_<seat>` (the seat name
+with `-` as `_`) beats the kind-wide `FLEET_OPENCODE_MODEL`, so `opencode-coder` keeps its own model. `fleet-yolo`
+keeps a running seat's `--model` across restarts. Model pins apply with `DROVER_YOLO=0` too; that setting drops only
+the approval-bypass flags. As with every model pin, the flag is applied at spawn: changing
+it does not move a seat that is already up. `fleet models` shows what each seat really runs.
+
+`DROVER_MANUAL_SEATS` keeps the watcher's hands off the seat: refill, the integration lane, land routing, reviewer
+picks, `fleet-hunt` and observer self-serve all skip it. In the observer queue it takes only lines that name it.
+`fleet status` shows `manual:` in front of its TITLE. It gets work only from the lead: `fleet assign <bean>
+qwen-coder`. Fix rounds for the beans it holds (reviewer CHANGES, unchecked items, its own land conflicts) still
+reach it, and its branches are reviewed on a different harness as usual (`opencode` here).
+
 To land: follow [`docs/RUNBOOK.md`](docs/RUNBOOK.md). To stop new work while everything in flight finishes:
 `touch ~/.local/share/drover/watch/state/finish-first`.
 
@@ -338,7 +374,9 @@ values as `${VAR:-value}` so an environment variable still wins. See [`examples/
 | `DROVER_GHOST_GRACE_MIN` | `30` | `fleet-ghost-reap`: minutes an in-progress bean must sit untouched before it counts as a ghost. |
 | `DROVER_GENERATED` | empty | ERE of generated paths `fleet-claim` refuses to claim. |
 | `DROVER_LEAD_SEATS` | `lead lead-backup` | Seats `fleet-yolo` never restarts and `fleet-observe` never maps for auto-rename. |
-| `DROVER_SEAT_MODELS` | empty | `seat=model` pairs: a seat with no `--model` of its own is relaunched on its pin by `fleet-yolo`. |
+| `DROVER_SEAT_MODELS` | empty | `seat=model` pairs: `fleet up` spawns the seat with `--model` (claude, opencode, agy), and `fleet-yolo` relaunches a seat that has no `--model` of its own on its pin. |
+| `FLEET_MODEL_<seat>` | empty | One seat's spawn-time `--model` (`-` in the seat name becomes `_`): `FLEET_MODEL_qwen_coder=ollama/...`. It beats `DROVER_SEAT_MODELS` and the kind pins `FLEET_CLAUDE_MODEL`, `FLEET_OPENCODE_MODEL` and `FLEET_AGY_MODEL`. Seats of other kinds ignore it. |
+| `DROVER_MANUAL_SEATS` | empty | Lead-only seats: no automatic dispatch ever picks them (see [Local model seat](#local-model-seat-ollama-through-opencode)). `fleet assign`/`fleet review` work as usual. |
 | `DROVER_SELF_SERVE` | empty | Harnesses whose idle seats self-serve per `docs/self-serve-playbook.md` (e.g. `opencode`). |
 | `DROVER_OWNED_AREAS` | empty | `area:owner-seat` pairs: areas one seat owns alone. Every self-serve prompt sent to another seat says never to take a bean there. |
 | `FLEET_HEAVY_SLOTS`, `FLEET_PUSH_SLOTS` | `5`, `4` | `fleet-slot`: general heavy-run slots are 2..N (`0` disables the limiter); push slots are separate and parallel. |

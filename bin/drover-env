@@ -59,6 +59,12 @@ FLEET_CAPS="${FLEET_CAPS:-$HOME/.config/drover/caps}"   # spend caps, re-read ev
 # pm, architect, analyst, sre, ...). A reviewer is always picked on a different harness from the coder.
 DROVER_ROSTER="${DROVER_ROSTER:-claude-coder:claude codex-coder:codex opencode-coder:opencode claude-reviewer:claude codex-reviewer:codex opencode-reviewer:opencode}"
 DROVER_LEAD_SEATS="${DROVER_LEAD_SEATS:-lead lead-backup}"   # never restarted by fleet-yolo
+# Lead-only seats (e.g. a small local model): no automatic dispatch ever picks them — not the watcher's refill,
+# integration lane, land routing or reviewer pick, not a hunt, not observer self-serve or a broadcast queue line.
+# They get work only from the lead: `fleet assign <bean> <seat>`, `fleet review`, a lead-queue line naming them,
+# and the fix rounds of beans they already hold. `fleet status` prefixes their TITLE with "manual:".
+DROVER_MANUAL_SEATS="${DROVER_MANUAL_SEATS:-}"
+drover_manual_seat(){ case " ${DROVER_MANUAL_SEATS:-} " in *" $1 "*) return 0 ;; esac; return 1; }
 
 # The integration branch every landing goes to, and the remote it is pushed to. Landings, the queue's
 # "is the bean on main" checks, the watcher's heal and every "is it landed/pushed" check use these. A project

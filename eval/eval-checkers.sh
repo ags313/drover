@@ -28,6 +28,12 @@
 #                        fleet-land-bean lands with an auto-push pass after each -> exactly one verify+push
 #   non-ASCII bean names a bean file named with ó/é in a repo with core.quotepath=true -> dispatched on the first pass
 #                        (also when the caller already sets core.quotepath=true, repeated, in GIT_CONFIG_COUNT)
+#   seat model pin       fleet up: FLEET_MODEL_<seat>/DROVER_SEAT_MODELS -> --model for opencode/claude/agy, beating the
+#                        kind pin (two opencode seats, two models); codex/cursor -> no --model; DROVER_YOLO=0 -> the
+#                        pins still apply, the bypass flags do not
+#   manual seats         DROVER_MANUAL_SEATS: refill gives a free manual seat no bean (fix rounds still flow); off the
+#                        list -> dispatched; fleet status TITLE says manual:; fleet assign to it -> dispatched;
+#                        route-land keeps an ownerless conflict flagged rather than hand it to a manual seat
 # No network, no keys. Exit 1 on the first wrong answer.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")/../bin" && pwd)"
@@ -252,7 +258,7 @@ rm -f "$FLEET_STATE/land-paused" "$FLEET_STATE/push-backoff" "$FLEET_STATE/finis
 git checkout -qb fleet/c1-bean-ll; echo ll > src/ll.txt; git add src/ll.txt; git commit -qm 'feat: ll (bean-ll)'; git checkout -q main
 mkdir -p "$FLEET_STATE/approved"; : > "$FLEET_STATE/approved/bean-ll"
 lock "$dead"; lane true
-[ ! -e "$PK" ] && git log --format=%s main | grep -q 'bean-ll' && ok 'a dead lock with nothing to push no longer blocks a land' \
+[ ! -e "$PK" ] && grep -q 'bean-ll' <<<"$(git log --format=%s main)" && ok 'a dead lock with nothing to push no longer blocks a land' \
   || bad "ahead-0 lock: lock=$([ -e "$PK" ] && echo kept || echo gone) landed=$(git log --format=%s main | grep -c bean-ll) $(grep -E 'push lock|AUTO-LAND' "$FLEET_STATE/../watch.log" 2>/dev/null | tail -2 | tr '\n' ' ')"
 # --- push batching: auto_push starts the verify+push only for a big enough or old enough batch ----------------
 # A copy of fleet-watch beside a stub verify (green, counts its calls) and a stub fleet-slot (runs the command).
@@ -372,5 +378,82 @@ out=$(cd "$T/ub" && env GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=core.quotepath GIT_C
   git ls-files .beans | grep -m1 "^.beans/$1--"' "$BIN/drover-env" "$uid" 2>/dev/null)
 [ "$out" = "false caller 4 .beans/$uid--auto-groups-dowódca-béret.md" ] && ok 'inherited repeated core.quotepath=true entries: still false, name matches, caller entry kept' \
   || bad "inherited quotepath entries: '$out'"
+
+# --- per-seat model pin and lead-only seats (a local model behind opencode) --------------------------------------
+# A stub herdr logs every call. `fleet up` (shared-tree mode) spawns one seat per kind: the per-seat pin
+# (FLEET_MODEL_<seat>, else DROVER_SEAT_MODELS) beats the kind pin for claude/opencode/agy, and codex/cursor get none.
+mkdir -p "$T/hbin"
+cat > "$T/hbin/herdr" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "$HERDR_LOG"
+case "$1 $2" in
+  'agent list') printf '{"result":{"agents":%s}}\n' "${HERDR_AGENTS:-[]}" ;;
+  'workspace list') echo '{"result":{"workspaces":[{"workspace_id":"w1","label":"fleet"}]}}' ;;
+  'tab list') echo '{"result":{"tabs":[]}}' ;;
+  'tab create') echo '{"result":{"root_pane":{"pane_id":"w1:p1"}}}' ;;
+  'agent prompt') printf '{"result":{"agent":{"name":"%s","agent_status":"working"}}}\n' "$3" ;;
+  'agent get') echo '{}' ;;
+esac
+exit 0
+STUB
+chmod +x "$T/hbin/herdr"
+hf(){ env -u DROVER_PROJECT FLEET_HERDR="$T/hbin/herdr" HERDR_LOG="$T/herdr.log" FLEET_WORKTREES=0 FLEET_NPROC_LIMIT=0 FLEET_ROOT="$T/eb" "$@"; }
+: > "$T/herdr.log"
+hf env FLEET='oc-coder:opencode qwen-coder:opencode cl-coder:claude cx-coder:codex cu-coder:cursor ag-coder:agy' \
+  FLEET_OPENCODE_MODEL=kind-oc FLEET_MODEL_qwen_coder=ollama/qwen3-coder-next:q4_K_M FLEET_MODEL_cl_coder=seat-cl \
+  FLEET_MODEL_cx_coder=seat-cx FLEET_MODEL_cu_coder=seat-cu DROVER_SEAT_MODELS='ag-coder=pair-ag' "$BIN"/fleet up >"$T/up.out" 2>&1
+args_of(){ sed -n "s/^agent start $1 .* -- //p" "$T/herdr.log"; }
+[ "$(args_of oc-coder)" = '--auto --model kind-oc' ] && [ "$(args_of qwen-coder)" = '--auto --model ollama/qwen3-coder-next:q4_K_M' ] \
+  && ok 'fleet up: two opencode seats spawn on two models (kind pin, per-seat pin)' \
+  || bad "opencode seats: oc='$(args_of oc-coder)' qwen='$(args_of qwen-coder)' up: $(head -c 300 "$T/up.out")"
+[ "$(args_of cl-coder)" = '--dangerously-skip-permissions --model seat-cl' ] && [ "$(args_of ag-coder)" = '--dangerously-skip-permissions --model pair-ag' ] \
+  && ok 'fleet up: per-seat pin for claude, DROVER_SEAT_MODELS pin for agy' || bad "claude/agy: cl='$(args_of cl-coder)' ag='$(args_of ag-coder)'"
+[ "$(args_of cx-coder)" = '--dangerously-bypass-approvals-and-sandbox' ] && [ "$(args_of cu-coder)" = '--yolo --approve-mcps --trust' ] \
+  && ok 'fleet up: codex and cursor seats ignore a per-seat pin' || bad "codex/cursor got a model: cx='$(args_of cx-coder)' cu='$(args_of cu-coder)'"
+# DROVER_YOLO=0 drops only the approval bypass: the pinned seat still gets its model, an unpinned codex seat gets nothing
+: > "$T/herdr.log"
+hf env DROVER_YOLO=0 FLEET='qwen-coder:opencode cx-coder:codex cl-coder:claude' FLEET_MODEL_qwen_coder=ollama/qwen3-coder-next:q4_K_M \
+  FLEET_CLAUDE_MODEL=kind-cl "$BIN"/fleet up >"$T/up.out" 2>&1
+[ "$(args_of qwen-coder)" = '--model ollama/qwen3-coder-next:q4_K_M' ] && [ "$(args_of cl-coder)" = '--model kind-cl' ] \
+  && grep -q '^agent start cx-coder ' "$T/herdr.log" && ! grep -q '^agent start cx-coder .* -- ' "$T/herdr.log" \
+  && ok 'fleet up with DROVER_YOLO=0: model pins kept, no bypass flags' \
+  || bad "DROVER_YOLO=0: qwen='$(args_of qwen-coder)' cl='$(args_of cl-coder)' cx: $(grep '^agent start cx-coder' "$T/herdr.log") up: $(head -c 300 "$T/up.out")"
+# fleet status: a manual seat's TITLE says so; NAME/KIND/STATE are untouched for every parser
+out=$(hf env FLEET='qwen-coder:opencode oc-coder:opencode' DROVER_MANUAL_SEATS=qwen-coder \
+  HERDR_AGENTS='[{"name":"qwen-coder","agent":"opencode","agent_status":"idle","pane_id":"w1:p1","cwd":"/x/eb","terminal_title_stripped":"opencode"},{"name":"oc-coder","agent":"opencode","agent_status":"idle","pane_id":"w1:p2","cwd":"/x/eb","terminal_title_stripped":"opencode"}]' \
+  "$BIN"/fleet status 2>&1)
+awk '$1=="qwen-coder" && $3=="idle" && $6=="manual:" {f=1} END{exit !f}' <<<"$out" && ! awk '$1=="oc-coder" && /manual:/ {f=1} END{exit !f}' <<<"$out" \
+  && ok 'fleet status marks only the manual seat, STATE column unchanged' || bad "status: $out"
+# refill: the stub coder x-claude-coder is free and one bean is ready. Listed in DROVER_MANUAL_SEATS it gets no bean
+# (the bean stays queued) but still gets a fix round queued for it; off the list the bean goes to it.
+git init -q -b main "$T/mb"
+( cd "$T/mb" && git config user.email e@x.invalid && git config user.name e && beans init >/dev/null \
+  && beans create 'manual seat bean' -t task -s todo >/dev/null && git add -A && git commit -qm bean )
+mid=$(ls "$T/mb/.beans" | sed -n 's/--.*//p' | head -1)
+mpass(){ ( cd "$T/mb" && env -u DROVER_PROJECT DROVER_REPO="$T/mb" FLEET_QUEUE="$T/mq" FLEET_INBOX="$T/min" FLEET_TASKS="$T/mtasks" \
+  FLEET_STATE="$T/mw/state" DISPATCHES="$T/mdispatches" "$@" "$T/dbin/fleet-watch" dispatch >/dev/null 2>"$T/m.err" ); }
+mpass env DROVER_MANUAL_SEATS='qwen-coder x-claude-coder'; mpass env DROVER_MANUAL_SEATS='qwen-coder x-claude-coder'
+[ ! -s "$T/mdispatches" ] && [ -n "$(ls "$T/mq" 2>/dev/null)" ] && ok 'refill: a free manual seat gets no bean over two passes; the bean stays queued' \
+  || bad "manual refill: dispatches='$(cat "$T/mdispatches" 2>/dev/null)' queue='$(ls "$T/mq" 2>/dev/null)' $(grep -E 'SKIP|DISPATCH' "$T/mw/watch.log" 2>/dev/null | tail -2 | tr '\n' ' ')"
+mkdir -p "$T/mw/state/followups"; printf 'x-zz99\t%s\n' "$T/mw/review.md" > "$T/mw/state/followups/x-claude-coder"
+mpass env DROVER_MANUAL_SEATS=x-claude-coder
+grep -q 'FOLLOWUP x-zz99 -> x-claude-coder' "$T/mw/watch.log" 2>/dev/null && [ ! -s "$T/mdispatches" ] \
+  && ok 'refill: a manual seat still gets the fix round of a bean it holds' || bad "manual followup: $(grep -E 'FOLLOWUP|DISPATCH' "$T/mw/watch.log" 2>/dev/null | tail -2 | tr '\n' ' ')"
+rm -f "$T/mtasks/x-claude-coder"; mpass env
+[ "$(cat "$T/mdispatches" 2>/dev/null)" = "$mid" ] && ok 'refill: the same seat off DROVER_MANUAL_SEATS takes the bean' \
+  || bad "non-manual refill: dispatches='$(cat "$T/mdispatches" 2>/dev/null)' $(grep -E 'SKIP|DISPATCH' "$T/mw/watch.log" 2>/dev/null | tail -2 | tr '\n' ' ')"
+# fleet assign: the lead hands a bean to the manual seat directly (x-ab12 is on $DROVER_REPO's main)
+: > "$T/herdr.log"
+out=$(cd "$DROVER_REPO" && hf env FLEET_ROOT="$DROVER_REPO" FLEET='qwen-coder:opencode' DROVER_MANUAL_SEATS=qwen-coder FLEET_BRIEFS="$T/home/briefs" \
+  "$BIN"/fleet assign x-ab12 qwen-coder 2>&1); rc=$?
+[ "$rc" = 0 ] && grep -q '^agent prompt qwen-coder New bean: .* x-ab12' "$T/herdr.log" && [ -f "$T/home/briefs/assign-qwen-coder-x-ab12.txt" ] \
+  && ok 'fleet assign <bean> <manual seat> dispatches to it' || bad "assign to a manual seat (rc=$rc): $out herdr: $(grep 'agent prompt' "$T/herdr.log" | head -c 200)"
+# land routing: an ownerless conflicted bean is never handed to a manual seat (the only live coder here)
+printf '%s\n' "$rl_reason" > "$FLEET_STATE/needs-land/bean-mn"
+python3 -c 'import os, sys, time; t = time.time() - 300; os.utime(sys.argv[1], (t, t))' "$FLEET_STATE/needs-land/bean-mn"
+DROVER_MANUAL_SEATS=claude-coder FLEET_BRIEFS="$T/home/briefs" "$T/wbin/fleet-watch" route-land >/dev/null 2>&1
+[ -e "$FLEET_STATE/needs-land/bean-mn" ] && ! grep -q '^bean-mn	' "$FLEET_STATE/followups/claude-coder" 2>/dev/null \
+  && ok 'route-land never hands an ownerless conflict to a manual seat' || bad 'route-land routed a conflict to a manual seat'
+rm -f "$FLEET_STATE/needs-land/bean-mn"
 
 [ "$fail" = 0 ] && echo 'all checker cases pass' || { echo 'checker cases FAILED'; exit 1; }

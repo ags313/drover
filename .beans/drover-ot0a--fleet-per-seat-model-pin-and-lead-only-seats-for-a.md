@@ -5,7 +5,7 @@ status: todo
 type: feature
 priority: high
 created_at: 2026-10-13T20:36:25Z
-updated_at: 2026-10-13T20:36:25Z
+updated_at: 2026-10-13T20:44:03Z
 ---
 
 Owner 2026-10-13: a local qwen model runs under ollama (`qwen3-coder-next:q4_K_M`, 262k context, GPU). It joins the fleet as a coder for simple tasks. Verified: `~/.config/opencode/opencode.jsonc` has an `ollama` provider (`@ai-sdk/openai-compatible`, baseURL `http://localhost:11434/v1`) and `opencode run --model ollama/qwen3-coder-next:q4_K_M "..."` answers.
@@ -28,7 +28,7 @@ Docs: README section "Local model seat (ollama through opencode)": the provider 
 Tests: eval cases next to the existing ones in `eval/`: (a) `agent_args` with a per-seat pin emits `--model` for opencode and claude, not for codex or cursor; (b) refill with a manual seat free and a ready bean leaves the seat idle; (c) `fleet assign` to a manual seat succeeds.
 
 Acceptance:
-- [ ] two opencode seats run two different models after `fleet up`
-- [ ] a seat in `DROVER_MANUAL_SEATS` never receives a bean from the watcher
-- [ ] `fleet assign <bean> qwen-coder` dispatches to it
-- [ ] docs and eval cases in place
+- [x] two opencode seats run two different models after `fleet up`
+- [x] a seat in `DROVER_MANUAL_SEATS` never receives a bean from the watcher
+- [x] `fleet assign <bean> qwen-coder` dispatches to it
+- [x] docs and eval cases in place

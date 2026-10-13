@@ -19,6 +19,7 @@ sent=0
 i=0
 # idle/done only: a MISSING seat has no pane to prompt, and `blocked` is waiting on a human
 for a in $("$DROVER_BIN"/fleet status 2>/dev/null | awk 'NR>1 && $1!="-" && ($3=="idle" || $3=="done") {print $1}'); do
+  drover_manual_seat "$a" && continue              # lead-only seats (DROVER_MANUAL_SEATS) get work from the lead alone
   case "$a" in
     *coder*|lead) continue ;;                      # coders hold beans
     *reviewer*|*sre*|*pm*|*architect*|*analyst*|judge|design) ;;

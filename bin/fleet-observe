@@ -49,11 +49,12 @@ def drover_env():
     """The same config every bash script sees: source drover-env (next to this file) and read it back."""
     env = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'drover-env')
     out = subprocess.run(
-        ['bash', '-c', '. "$0"; printf "%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s" "$DROVER_REPO" "$FLEET_TASKS" '
+        ['bash', '-c', '. "$0"; printf "%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0%s" "$DROVER_REPO" "$FLEET_TASKS" '
          '"$FLEET_REPORTS" "$FLEET_STATE" "$DROVER_HOME" "$DROVER_LEAD_SEATS" "$DROVER_SRC" '
-         '"$DROVER_SELF_SERVE" "$DROVER_MIGRATIONS_STATUS" "$DROVER_OWNED_AREAS" "$DROVER_MAIN_BRANCH" "$DROVER_REMOTE"', env],
+         '"$DROVER_SELF_SERVE" "$DROVER_MIGRATIONS_STATUS" "$DROVER_OWNED_AREAS" "$DROVER_MAIN_BRANCH" "$DROVER_REMOTE" '
+         '"$DROVER_MANUAL_SEATS"', env],
         capture_output=True, text=True, check=True).stdout.split('\0')
-    return dict(zip(('repo', 'tasks', 'reports', 'state', 'home', 'leads', 'src', 'self_serve', 'mig_status', 'owned_areas', 'main', 'remote'), out))
+    return dict(zip(('repo', 'tasks', 'reports', 'state', 'home', 'leads', 'src', 'self_serve', 'mig_status', 'owned_areas', 'main', 'remote', 'manual'), out))
 
 
 CFG = drover_env()
@@ -513,6 +514,8 @@ SELF_SERVE = set(CFG['self_serve'].split())
 # A scope decision has to reach EVERY prompt source the same hour — role playbooks AND this generated prompt: when
 # only the playbooks said it, three self-serving seats drifted into the owned area from this prompt's text.
 OWNED = [x.split(':', 1) for x in CFG['owned_areas'].split() if ':' in x]
+# Lead-only seats (DROVER_MANUAL_SEATS): never self-serve, and from the queue only a line that names them.
+MANUAL = set(CFG.get('manual', '').split())
 
 
 def owned_exclusion(seat):
@@ -526,7 +529,7 @@ def dispatch(ag, off):
         return
     pool_raw = [l.strip() for l in open(POOL) if l.strip()]
     pool = [l.split(':')[0] for l in pool_raw]
-    named_only = {l.split(':')[0] for l in pool_raw if l.endswith(':named')}
+    named_only = {l.split(':')[0] for l in pool_raw if l.endswith(':named')} | MANUAL
     lines = [l.rstrip('\n') for l in open(QUEUE) if l.strip()]
     held = {seat for seat, _, _ in ledger()}
     idle = []
@@ -544,7 +547,7 @@ def dispatch(ag, off):
         if pick is None:
             # throttled per seat, so a seat that finds nothing is not re-prompted every tick
             stamp = f'{STATE}/self-serve-{seat}.stamp'
-            if a.get('agent') in SELF_SERVE and (not os.path.exists(stamp) or NOW - os.path.getmtime(stamp) > 1200):
+            if a.get('agent') in SELF_SERVE and seat not in MANUAL and (not os.path.exists(stamp) or NOW - os.path.getmtime(stamp) > 1200):
                 open(stamp, 'w').write(str(int(NOW)))
                 lines.append(f'self-serve\t{seat}\tSelf-serve: read and follow {PLAYBOOK} section "Self-serve" '
                              '(pick an unowned ready bean in scope and land it, or run one hunt).' + owned_exclusion(seat))

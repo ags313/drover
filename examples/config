@@ -21,6 +21,11 @@ DROVER_LEAD_SEATS="${DROVER_LEAD_SEATS:-lead lead-backup}"
 # Per-seat model pins, seat=model pairs. fleet-yolo relaunches a seat that has no --model of its own on
 # its pinned model, so a restart cannot quietly move e.g. the judge to the harness default.
 DROVER_SEAT_MODELS="${DROVER_SEAT_MODELS:-}"   # e.g. 'judge=<model-id> architect=<model-id>'
+# One seat's spawn-time --model, beating the pairs above and the kind pins (seat name with - as _). For
+# claude, opencode and agy seats; e.g. a local model behind opencode (README "Local model seat"):
+# FLEET_MODEL_qwen_coder="${FLEET_MODEL_qwen_coder:-ollama/qwen3-coder-next:q4_K_M}"
+# Lead-only seats: the watcher never hands them a bean; only `fleet assign <bean> <seat>` does.
+DROVER_MANUAL_SEATS="${DROVER_MANUAL_SEATS:-}"   # e.g. 'qwen-coder'
 
 # Observer mode (fleet-observe). Harnesses whose idle seats pick their own work from the board when no queued
 # line fits them (docs/self-serve-playbook.md). Empty = idle seats just raise the idle alert.

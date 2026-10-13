@@ -25,7 +25,8 @@
 #                                  procs under an idle agent), heavy (> FLEET_HEAVY_MB); --report feeds the sidebar
 #
 # Env: FLEET="name:kind ..." (default: DROVER_ROSTER) FLEET_ROOT (default: DROVER_REPO) FLEET_WORKTREES=1
-#      FLEET_SEED_WIP=1 FLEET_ADOPT=0 FLEET_OPENCODE_MODEL FLEET_CLAUDE_MODEL FLEET_AGY_MODEL FLEET_FORCE=1 (rm dirty)
+#      FLEET_SEED_WIP=1 FLEET_ADOPT=0 FLEET_OPENCODE_MODEL FLEET_CLAUDE_MODEL FLEET_AGY_MODEL FLEET_MODEL_<seat>
+#      FLEET_FORCE=1 (rm dirty)
 #      FLEET_BOOTSTRAP="cmd" FLEET_TIMEOUT(ms) FLEET_TAIL FLEET_STALE_MIN=10 (minutes) FLEET_HEAVY_MB=2048
 #      DROVER_CLONE_DIRS DROVER_COPY_FILES DROVER_BUILD DROVER_TEST — see examples/config
 set -euo pipefail
@@ -56,6 +57,10 @@ FLEET_ADOPT="${FLEET_ADOPT:-0}"
 # seat's model from its name. Empty = the harness's own default.
 FLEET_OPENCODE_MODEL="${FLEET_OPENCODE_MODEL:-}"
 FLEET_AGY_MODEL="${FLEET_AGY_MODEL:-}"       # agy = Antigravity CLI; pin a model to keep its reviews cross-model
+# Per-SEAT pin, same spawn-time flag: FLEET_MODEL_<seat> (the seat name with every character outside [A-Za-z0-9_]
+# as _, e.g. FLEET_MODEL_qwen_coder), else the seat's DROVER_SEAT_MODELS entry (the pin fleet-yolo restarts it on).
+# It wins over the kind pin above, so two opencode seats can run two models. Only kinds that take --model use it:
+# claude, opencode, agy. Every pin applies with DROVER_YOLO=0 as well; that drops only the approval-bypass flags.
 FLEET_TIMEOUT="${FLEET_TIMEOUT:-900000}"     # ms to wait in `task` (15 min)
 FLEET="${FLEET:-$DROVER_ROSTER}"
 LEDGER="$FLEET_LEDGER"
@@ -351,23 +356,34 @@ cwd_of() { [ "$FLEET_DRY_RUN" = 1 ] && { printf '%s' "WORKTREE"; return 0; }; he
 state_of() { herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.agent_status // "missing"'; }
 log() { mkdir -p "$(dirname "$LEDGER")"; printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$@" >> "$LEDGER"; }  # event agent harness role bean note
 
-agent_args() {  # kind -> native CLI args: no approval prompts (+ model pin for opencode)
-  [ "$FLEET_YOLO" = 1 ] || return 0
+seat_model() {  # seat -> its own model pin (FLEET_MODEL_<seat>, else DROVER_SEAT_MODELS), or nothing
+  [ -n "${1:-}" ] || return 0
+  local v="FLEET_MODEL_${1//[^A-Za-z0-9_]/_}" p
+  [ -n "${!v:-}" ] && { printf '%s' "${!v}"; return 0; }
+  for p in ${DROVER_SEAT_MODELS:-}; do [ "${p%%=*}" = "$1" ] && { printf '%s' "${p#*=}"; return 0; }; done
+  return 0
+}
+agent_args() {  # kind [seat] -> native CLI args: approval bypass (DROVER_YOLO=1 only), then --model (seat pin, else kind pin)
+  local m y; m=$(seat_model "${2:-}"); y=""
   case $1 in
-    claude)   printf '%s' "--dangerously-skip-permissions${FLEET_CLAUDE_MODEL:+ --model $FLEET_CLAUDE_MODEL}" ;;
-    codex)    printf '%s' "--dangerously-bypass-approvals-and-sandbox" ;;
-    opencode) printf '%s' "--auto${FLEET_OPENCODE_MODEL:+ --model $FLEET_OPENCODE_MODEL}" ;;
-    cursor)   printf '%s' "--yolo --approve-mcps --trust" ;;
-    grok)     printf '%s' "--always-approve" ;;
-    agy)      printf '%s' "--dangerously-skip-permissions${FLEET_AGY_MODEL:+ --model $FLEET_AGY_MODEL}" ;;
+    claude)   y="--dangerously-skip-permissions"; m=${m:-${FLEET_CLAUDE_MODEL:-}} ;;
+    codex)    y="--dangerously-bypass-approvals-and-sandbox"; m= ;;
+    opencode) y="--auto"; m=${m:-$FLEET_OPENCODE_MODEL} ;;
+    cursor)   y="--yolo --approve-mcps --trust"; m= ;;
+    grok)     y="--always-approve"; m= ;;
+    agy)      y="--dangerously-skip-permissions"; m=${m:-$FLEET_AGY_MODEL} ;;
+    *)        m= ;;
   esac
+  # The model pin does not depend on the bypass: a DROVER_YOLO=0 seat still runs the model it is pinned to.
+  [ "$FLEET_YOLO" = 1 ] || y=""
+  printf '%s' "$y${m:+${y:+ }--model $m}"
 }
 
 # Which MODEL each agent is actually running -- read from the harness's own state files,
 # never guessed. An invented label goes stale silently and reads as fact; a harness that
 # records nothing gets "?".
 model_of() {  # name kind cwd
-  local sess dir f
+  local sess dir f m
   case "$2" in
     codex)            # footer when visible, else the configured default it launched with
       herdr agent read "$1" --source visible --lines 8 2>/dev/null | tr -d '\r' \
@@ -383,7 +399,7 @@ model_of() {  # name kind cwd
     grok)             # session dir = the cwd with / percent-encoded
       sess=$(jq -r --arg c "$3" '.[] | select(.cwd == $c) | .session_id' "$HOME/.grok/active_sessions.json" 2>/dev/null | head -1)
       [ -n "$sess" ] && grep -rhoE '"model": *"[^"]+"' "$HOME/.grok/sessions/$(printf '%s' "$3" | sed 's|/|%2F|g')/$sess" 2>/dev/null | tail -1 | cut -d'"' -f4 || true ;;
-    agy)  printf '%s' "${FLEET_AGY_MODEL:-?}" ;;   # we pass it on the command line
+    agy)  m=$(seat_model "$1"); printf '%s' "${m:-${FLEET_AGY_MODEL:-?}}" ;;   # we pass it on the command line
   esac
 }
 cmd_models() {
@@ -407,12 +423,15 @@ cmd_status() {
   live=$(agents)
   printf '%-18s %-9s %-8s %-7s %-24s %s\n' NAME KIND STATE PANE CWD TITLE
   for spec in $FLEET; do
-    local name=${spec%%:*} kind=${spec##*:} row
+    local name=${spec%%:*} kind=${spec##*:} row tp=""
+    # A lead-only seat (DROVER_MANUAL_SEATS) idles by design: say so in TITLE, the free-text last column, so every
+    # parser of NAME/KIND/STATE reads the row unchanged.
+    drover_manual_seat "$name" && tp="manual: "
     row=$(jq -c --arg n "$name" 'select(.name == $n)' <<<"$live")
     if [ -z "$row" ]; then
-      printf '%-18s %-9s %-8s %-7s %-24s %s\n' "$name" "$kind" MISSING - - "(run: fleet up)"; rc=1; continue
+      printf '%-18s %-9s %-8s %-7s %-24s %s\n' "$name" "$kind" MISSING - - "$tp(run: fleet up)"; rc=1; continue
     fi
-    jq -r '[.name, .agent, .agent_status, .pane_id, (.cwd|split("/")|last), (.terminal_title_stripped[:60])] | @tsv' <<<"$row" \
+    jq -r --arg tp "$tp" '[.name, .agent, .agent_status, .pane_id, (.cwd|split("/")|last), $tp + (.terminal_title_stripped[:60] // "")] | @tsv' <<<"$row" \
       | awk -F'\t' '{printf "%-18s %-9s %-8s %-7s %-24s %s\n",$1,$2,$3,$4,$5,$6}'
     [ "$(jq -r .agent_status <<<"$row")" = unknown ] && rc=1
   done
@@ -509,7 +528,7 @@ worktree_pane() {  # <name> -> root pane of the agent's own workspace (reused if
 }
 
 start_agent() {  # name kind pane — a fresh shell needs a moment before it is "available"
-  local err args; err=$(mktemp); args=$(agent_args "$2")
+  local err args; err=$(mktemp); args=$(agent_args "$2" "$1")
   # the seat shell (and so the agent and everything it runs) gets a per-user process ceiling and a two-worker jest
   # default BEFORE the agent starts. ulimit only lowers; FLEET_NPROC_LIMIT=0 skips it.
   # In a multi-project setup the seat's shell carries its project, so whatever the agent runs (fleet-done,
