@@ -11,7 +11,7 @@ Every poll (default 60 s):
      findings to the queue as fix items, which fleet-batch groups.
   3. Every 300 s fleet-batch groups fix items and fleet-feed restocks the queue from the focus beans.
   4. Ghost slot waiters (fleet-slot, parent init, cwd gone, > 10 min) are SIGTERMed and logged. Nothing else is killed.
-Only seats whose role is coder or reviewer are refilled; a seat with a recent bean-named commit not yet on the main branch is mid-task and HELD, and a pinned seat (DROVER_PINS_FILE) is skipped; dedicated seats (DROVER_REFILL_DEDICATED) and seats on a dead
+Only seats whose role is coder or reviewer are refilled; a seat with a recent bean-named commit not yet on the main branch is mid-task and HELD, a landing audit nudges the owner of any branch holding unlanded bean commits, and a pinned seat (DROVER_PINS_FILE) is skipped; dedicated seats (DROVER_REFILL_DEDICATED) and seats on a dead
 harness (DROVER_REFILL_SKIP_HARNESSES: a harness whose quota is exhausted swallows queue items) are never sent work.
 Never sends faster than COOLDOWN per seat, never below MIN_FREE_GB of free disk. Reads only names/cwds, never argv.
 
@@ -31,7 +31,7 @@ def drover_env():
     here = os.path.dirname(os.path.abspath(__file__))
     env = os.path.join(here, 'drover-env')
     keys = ['DROVER_BIN', 'DROVER_HOME', 'DROVER_ROSTER', 'DROVER_BEAN_RE', 'FLEET_BRIEFS', 'FLEET_REPORTS', 'FLEET_REFILL_LOG',
-            'DROVER_REFILL_DEDICATED', 'DROVER_REFILL_SKIP_HARNESSES', 'DROVER_HUNT_AREAS', 'DROVER_WORKTREES', 'DROVER_PINS_FILE', 'DROVER_MID_TASK_MIN', 'FLEET_STATE']
+            'DROVER_REFILL_DEDICATED', 'DROVER_REFILL_SKIP_HARNESSES', 'DROVER_HUNT_AREAS', 'DROVER_WORKTREES', 'DROVER_PINS_FILE', 'DROVER_MID_TASK_MIN', 'FLEET_STATE', 'DROVER_REPO', 'DROVER_TESTDB_UP']
     out = subprocess.run(['bash', '-c', '. "$0"; for k in "$@"; do printf "%s=%s\\0" "$k" "${!k:-}"; done', env, *keys],
                          capture_output=True, text=True, check=True).stdout
     return dict(kv.split('=', 1) for kv in out.split('\0') if '=' in kv)
@@ -69,6 +69,11 @@ WORKTREES = E['DROVER_WORKTREES']
 PINS_FILE = E['DROVER_PINS_FILE']
 MID_TASK_S = int(E['DROVER_MID_TASK_MIN'] or '90') * 60
 STATE_DIR = E['FLEET_STATE']
+REPO = E['DROVER_REPO']
+TESTDB_UP = E['DROVER_TESTDB_UP']
+AUDIT_EVERY = int(os.environ.get('REFILL_AUDIT_EVERY', '600'))
+NUDGE_MIN = int(os.environ.get('REFILL_NUDGE_MIN', '30'))      # a branch with unlanded bean commits this old is nudged once per tip
+ALERT_MIN = int(os.environ.get('REFILL_ALERT_MIN', '60'))      # this old: written to alerts/unlanded.txt (fleet-preflight turns it into DEAD)
 PRE_EVERY = int(os.environ.get('REFILL_PREFLIGHT_EVERY', '600'))
 ASSIGN_ITEM = re.compile(r'QUEUE \d*-?assign-(' + BEAN_RE + ')')
 
@@ -181,6 +186,44 @@ def mid_task(seat):
     return False
 
 
+def landing_audit(st, now):
+    """Every fleet/<seat>-<bean> branch (3 days) whose newest unlanded bean-named commit is NUDGE_MIN+ minutes old and not on the main branch
+    by subject gets ONE nudge per branch tip; the same branches at ALERT_MIN+ minutes are written to alerts/unlanded.txt."""
+    if not REPO:
+        return
+    out = run(['git', '-C', REPO, 'for-each-ref', '--format=%(refname:short) %(committerdate:unix)', 'refs/heads/fleet/'], timeout=30).stdout.splitlines()
+    nudged = st.setdefault('nudged', {})
+    alerts = []
+    env = dict(os.environ, FLEET_LANDED_REPO=REPO)
+    for line in out:
+        br, _, ts = line.partition(' ')
+        m = re.match(r'fleet/(.+)-(' + BEAN_RE + r')$', br)
+        if not m or not ts.isdigit() or now - int(ts) > 3 * 86400:
+            continue
+        seat, bean = m.groups()
+        tip = run(['git', '-C', REPO, 'log', '-1', '--format=%h', br], timeout=15).stdout.strip()
+        try:
+            c = subprocess.run([f'{BIN}/fleet-branch-landed', br], capture_output=True, text=True, timeout=60, env=env)
+        except Exception:
+            continue
+        if c.returncode == 0:
+            continue
+        lines = c.stdout.splitlines()
+        age = int(lines[0].split()[1]) if lines and lines[0].startswith('AGE') else 0
+        subs = lines[1:]
+        if age >= ALERT_MIN:
+            alerts.append(f'{br}: {len(subs)} unlanded, oldest {age} min')
+        if age >= NUDGE_MIN and nudged.get(br) != tip and seat in SEATS and not mid_task(seat):
+            msg = (f'LANDING AUDIT: {len(subs)} commit(s) of {bean} on {br} are not on the main branch by subject (oldest {age} min), e.g. "{subs[0][:80]}". '
+                   f'Land the green ones now (git fetch; git rebase --onto origin/main <base>;' + (f' eval "$({TESTDB_UP})";' if TESTDB_UP else '') +
+                   f' git push origin HEAD:main; prove git log origin/main --grep={bean}); then fleet-done. If one must not land, say why in the report.')
+            rr = run([f'{BIN}/fleet', 'followup', seat, msg], timeout=60)
+            nudged[br] = tip
+            log(f'NUDGE {seat} {bean}: {len(subs)} unlanded, {age} min' + ('' if rr.returncode == 0 else f' (send failed rc={rr.returncode})'))
+    os.makedirs(f'{STATE_DIR}/alerts', exist_ok=True)
+    open(f'{STATE_DIR}/alerts/unlanded.txt', 'w').write('\n'.join(alerts) + ('\n' if alerts else ''))
+
+
 def reap_ghosts(dry):
     r = run(['pgrep', '-f', 'fleet-slot'])
     for pid in [int(x) for x in r.stdout.split() if x.isdigit()]:
@@ -216,6 +259,12 @@ def tick(dry):
     if free_gb < MIN_FREE_GB:
         log(f'DISK GUARD: only {free_gb:.1f} GB free (< {MIN_FREE_GB}): no new work sent')
         return
+    if now - st.get('audit', 0) > AUDIT_EVERY:           # landing audit: finished work must reach the main branch; nudge the owner once per tip, escalate later
+        st['audit'] = now
+        try:
+            landing_audit(st, now)
+        except Exception as e:
+            log(f'landing audit error: {e!r}')
     if now - st.get('pre', 0) > PRE_EVERY:              # the silent dependencies, each a check that can fail (mode vs lander, credentials, production lag)
         st['pre'] = now
         r = run([f'{BIN}/fleet-preflight'], timeout=90)

@@ -74,6 +74,8 @@ more interruptible lander than a script and recreates the lead bottleneck.
   commits. A seat's "pushed" or "closed" is a claim.
 - L2 DEPLOYED: the production version endpoint contains the L1 commits, inside a deploy window.
 - L3 MEASURED: the acceptance number is recorded with its source. User-visible items complete at L3; internal ones may complete at L1.
+Landing is enforced by three machines (`fleet-done` refuses unlanded finished work in direct mode, the refill audit nudges at 30 and
+alerts at 60 minutes, `fleet-preflight` turns the alert into DEAD; see LESSONS).
 Production may not lag the main branch: `fleet-preflight` is DEAD when code commits older than 90 minutes are undeployed.
 
 ## Rhythm

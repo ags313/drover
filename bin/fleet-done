@@ -27,6 +27,26 @@ case "$a" in
     fi ;;
 esac
 
+# LANDING GATE: in publish-mode=direct a seat may not announce DONE/PARTIAL/READY while its branch carries bean-named commits that are not
+# on the main branch by subject (measured: over half of seat reports named commits that were not landed an hour later). The refusal is
+# delivered to the lead as BLOCKED (the watcher re-prompts the seat) and the seat gets exit 7 with the exact steps. BLOCKED and CHANGES are
+# always allowed. Escape hatch for a genuine reason (a decision, a dependency): FLEET_UNLANDED_OK="<reason>", recorded in the summary.
+if [ "$(cat "$DROVER_PUBLISH_MODE_FILE" 2>/dev/null || echo direct)" = direct ] && { [ "$state" = DONE ] || [ "$state" = PARTIAL ] || [ "$state" = READY ]; }; then
+  case "$(git branch --show-current 2>/dev/null)" in fleet/*)
+    if unl=$("$DROVER_BIN/fleet-branch-landed" HEAD 2>/dev/null); then :; else
+      if [ -n "${FLEET_UNLANDED_OK:-}" ]; then summary="$summary [UNLANDED: ${FLEET_UNLANDED_OK}]"
+      else
+        n=$(printf '%s\n' "$unl" | sed 1d | wc -l | tr -d ' ')
+        ts=$(date +%s); printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$ts" "$a" "$bean" BLOCKED "UNLANDED: $n bean commit(s) not on the main branch by subject, land them first: $(printf '%s' "$unl" | sed 1d | head -2 | tr '\n' ';' | cut -c1-200)" "$report" > "$INBOX/$ts-$a-$bean.msg"
+        { echo "fleet-done: REFUSED $state: $n commit(s) of yours are not on the main branch (by subject):"; printf '%s\n' "$unl" | sed 1d | head -8 | sed 's/^/  - /'
+          echo "Land them now: git fetch origin; git rebase --onto origin/main <your base>;${DROVER_TESTDB_UP:+ eval \"\$($DROVER_TESTDB_UP)\";} git push origin HEAD:main (retry up to 3x if main moved); prove: git log origin/main --grep=$bean."
+          echo "Then run fleet-done again. If a commit must NOT land, set FLEET_UNLANDED_OK=\"<reason>\" and say so in the report. (Delivered to the lead as BLOCKED.)"; } >&2
+        exit 7
+      fi
+    fi ;;
+  esac
+fi
+
 ts=$(date +%s)
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$ts" "$a" "$bean" "$state" "$summary" "$report" \
   > "$INBOX/$ts-$a-$bean.msg"

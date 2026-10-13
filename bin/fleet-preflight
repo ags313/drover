@@ -4,6 +4,7 @@
 #   * publish mode vs lander state: the mode file says how seats publish; "lander" with no installed+enabled lander means seats were
 #     told not to push to a tool that does not run; "direct" with the enable marker present means the pre-push hook refuses their pushes
 #   * fleet-cred-check (credentials, daemon heartbeat, keychain)
+#   * unlanded work: a seat branch holding bean commits not on the main branch (by subject) for > 60 min, from fleet-refill's landing audit
 #   * production lag: the deployed commit (DROVER_PROD_VERSION_URL) may not trail the main branch by code commits older than
 #     DROVER_PROD_LAG_MIN minutes: landed code that is not deployed is a stall, not a plan
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/drover-env"
@@ -33,4 +34,9 @@ if [ -n "$DROVER_PROD_VERSION_URL" ] && [ -n "${DROVER_REPO:-}" ]; then
     else ok "production ${prod:0:7} within window ($n undeployed code commits)"; fi
   fi
 fi
+# finished work must reach the main branch: any seat branch holding bean commits not on it by subject for > 60 min (written by the refill landing audit)
+if [ -s "$FLEET_STATE/alerts/unlanded.txt" ]; then
+  n=$(wc -l < "$FLEET_STATE/alerts/unlanded.txt" | tr -d ' ')
+  dead "$n seat branch(es) hold bean commits not on the main branch for > 60 min: $(head -3 "$FLEET_STATE/alerts/unlanded.txt" | tr '\n' ';' | cut -c1-240)"
+else ok "no seat branch holds bean commits unlanded for > 60 min"; fi
 exit $bad

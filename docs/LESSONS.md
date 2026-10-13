@@ -1313,3 +1313,23 @@ time; 88% of 1,395 dispatches in one day carried no work item; production was le
 - **Checks that can fail:** `fleet-preflight` exits 1; refill log lines `HOLD` and `PREFLIGHT`; metrics for the next retro: dispatches per
   landed item (18 measured, target 4), reports with claimed subjects missing after an hour (56%, target < 15%), production lag minutes
   (target < 90).
+
+## Landing is guaranteed by three machines, not by reminders (2026-10-13)
+Cause (measured): about 145 bean-named commits sat on seat branches overnight, and 56% of seat reports named a commit that was not on the
+main branch an hour later. Reminders did not hold; each of these can fail and acts.
+- **A seat cannot announce finished work that is unlanded.** In publish-mode=direct, `fleet-done` refuses DONE, PARTIAL and READY (exit 7,
+  delivered to the lead as BLOCKED "UNLANDED: ...") while the branch has bean-named commits that are not on the main branch BY SUBJECT
+  (`fleet-branch-landed`). BLOCKED and CHANGES are always allowed. The only escape is `FLEET_UNLANDED_OK="<reason>"`, which is written into
+  the report summary; a reason that is not a decision or a dependency is a defect. In lander mode the gate does not apply: READY is the
+  lander's input.
+- **The landing audit chases the rest.** Every 10 minutes `fleet-refill` finds every `fleet/<seat>-<bean>` branch (3 days) with unlanded
+  bean commits: at 30 minutes it nudges the owner ONCE per branch tip (log `NUDGE`; a seat that is mid-task is not nudged); at 60 minutes it
+  writes `alerts/unlanded.txt`.
+- **Preflight turns the 60-minute alert into DEAD.** `fleet-preflight` exits 1 while any branch has held unlanded bean commits for 60+
+  minutes; the lead lands or reassigns it that hour, and never closes a bean whose subjects are not on the main branch.
+- **Match by subject, never by SHA.** A rebase changes the SHA, so `merge-base --is-ancestor <old sha>` reports landed work as missing;
+  `fleet-branch-landed` greps the main branch for the commit's subject (first 70 characters, fixed string) and ignores commits that name no
+  bean (base noise from a local main) and `wip:` parking commits.
+- **Checks that can fail:** `fleet-branch-landed <branch>` (exit 1 + subjects), `fleet-done` exit 7, refill log `NUDGE`, `fleet-preflight`.
+  Tests: `tests/landing-gate.test.sh` (20 checks, three mutants fail it). **Metric:** reports with claimed subjects missing after an hour
+  (56% measured, target < 15%); unlanded bean commits older than 60 minutes (target 0).
