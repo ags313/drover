@@ -5,7 +5,7 @@ status: todo
 type: task
 priority: normal
 created_at: 2026-10-13T21:08:07Z
-updated_at: 2026-10-13T21:08:07Z
+updated_at: 2026-10-13T21:16:45Z
 ---
 
 Import the documentation from upstream (remote `origin` = andrebrov/drover, commits e6d9d54, 2c92453, 8479c6b): `docs/OPERATING-MODEL.md` (new) and the four new `docs/LESSONS.md` sections ("Batch lander ...", "Assignment, queue and daemon rules (2026-10-12 retro)", "Cadence rules (2026-10-13)", "Landing is guaranteed by three machines ...").
@@ -19,5 +19,5 @@ How:
 - Commit message is ours: no co-author trailers from upstream.
 
 Acceptance:
-- [ ] both files present, README links the new doc
-- [ ] the fork note at the top of OPERATING-MODEL.md names what we do not run
+- [x] both files present, README links the new doc
+- [x] the fork note at the top of OPERATING-MODEL.md names what we do not run

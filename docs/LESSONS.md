@@ -1221,3 +1221,125 @@ known-good passed). A per-user process ceiling turns an unbounded fork into EAGA
 each slot child's own tree (`systemd-run --user --scope`).
 **Metric:** node processes per user during a test run stays under the ceiling; inline-eval jest fan-outs in
 prompts/scripts = 0.
+
+## Batch lander: seats report READY, one process lands everything with one gate and one push (2026-10-12)
+> Imported from upstream drover. This fork does not ship `fleet-batch-land`; `fleet-land-bean` lands one bean at a time.
+
+Five or more seats ran the full pre-push gate at once; main moved under them, they rebased and retried, and finished work sat
+unlanded for hours. A push lock would serialize the seats (they wait). The lander does not: seats keep working and report READY;
+`fleet-batch-land` (enabled by a marker file, off by default) is the only process that pushes main.
+- **READY is a promise about an exact tip.** `fleet-batch-land ready <agent> <bean>` records the branch tip and its named commits, and
+  requires a reviewer APPROVE, the branch pushed at that tip (the BRANCH, never main), and a report with `REBASED: YES` and a
+  `VERIFIED: BUILD 0 ...` line. A branch that moves afterwards is a different review: it is dropped, not landed. A branch carrying a
+  commit that does not name the approved bean is refused (the approval speaks for one bean).
+- **Land the named commits, not the branch.** The lander cherry-picks each READY branch's commits onto the remote tip in one worktree and
+  requires the picked diff to equal the reviewed diff. A stale branch therefore cannot delete work that landed after it forked.
+- **One gate on the stack; bisect on red.** The gate is the repo's own pre-push hook (`git push --dry-run`), so there is one definition of
+  green, and the real push replays the hook's pass cache. On red the lander binary-searches the stack for the first branch that turns it red,
+  confirms with one forced re-run (a long gate must not drop a good branch on a flake), drops it with the failure text, notifies its seat
+  with CHANGES, and re-stacks the rest. One bad branch never blocks the others.
+- **A red gate is only a branch's fault if the baseline is green.** Before blaming anyone the lander runs the same checks on the bare remote
+  tip; red there means nobody is dropped and nothing is pushed. Environment failures (database unreachable, disk full, a fixture or lease
+  error, a gate killed by a signal, a stale git lock) are never charged to a branch either.
+- **Landed means proven.** After the push the lander fetches and prints `PROOF <bean> <sha> -> <sha> ancestor-of <remote>/<branch>: YES|NO`
+  per commit. A bean is recorded LANDED, and its READY record removed, only if every commit is proven; otherwise it stays READY and the
+  run exits non-zero. A seat's "landed" is true only after those lines exist.
+- **The lander must not hurt what it does not own.** It resets and cleans only a worktree it created (ownership marker, never a symlink); a
+  pre-existing path is refused. Test: a seat's untracked file and tracked edit survived only after the check existed. It re-reads the enable
+  marker right before the push. It runs under a kernel lock (`lockf`), so there is no stale-lock takeover race and a dead lander frees it. The
+  gate and the push run in their own process group, and a TERM kills the group before the lock is released.
+- **Do not leave work on local main.** A branch built on commits that exist only on a local main cannot be READY (those commits name no bean)
+  and conflicts with the remote. While the lander is on, local main is not a work area.
+- **Seats must not push main.** The pre-push hook refuses a push of main from a seat worktree while the marker exists, unless the lander sets
+  `FLEET_BATCH_LANDER=1` (`examples/pre-push-lander.sh`). The hook also brings the gate's test database up itself, except when the operator
+  supplied fixture manifests, where injecting a global URL would make the validator refuse a legitimate push.
+**Metric:** pushes per N landed beans (1 per batch), gate runs per landed bean, branches dropped with a failure text vs. dropped without one
+(0), PROOF lines per landed commit (all YES), seat-initiated pushes of main while the marker exists (0).
+**Pending:** later review rounds on the lander are still in progress; this entry describes the behaviour that is on the main branch of the
+source project. The TERM-kills-the-gate test is timing-sensitive under bash 3.2 and failed 2 of 3 runs there; it passes under bash 5.
+
+## Assignment, queue and daemon rules (2026-10-12 retro)
+> Imported from upstream drover. This fork does not ship `fleet-refill`, `fleet-feed`, `fleet-batch` or `fleet-cred-check`; `fleet-watch` does the dispatching.
+
+Counts that day: 5 assigns, 4 returned BLOCKED within minutes (a dirty or stale seat worktree, or the bean file missing); 2 of 8 audit-labelled
+"coder" beans were already landed; 5 queue items vanished into seats whose harness had no quota; 1 daemon was silent for 1h43m; 3 seat reports
+said "pushed/closed" while the commits sat on a side branch. Last retro's credential rule worked as a report but the cause kept firing: the
+login keychain locks for background processes, which reads as a token expiry.
+- **Assign through `fleet assign` only. `fleet followup` does not switch branches.** A follow-up that names a different bean leaves the seat on
+  the old bean's branch and merges the new work onto it. `fleet assign` runs `fleet-prep`: leftover work is parked on a `wip/` branch (a
+  commit, nothing discarded), an existing bean branch is resumed and never reset (a reset to the remote tip orphaned READY commits), otherwise
+  a new branch is cut from the remote tip; the shared checkout is refused. Check: the seat worktree's current branch equals
+  `fleet/<seat>-<bean>` right after dispatch.
+- **A queue claim is not completion.** `fleet-refill` claims an item by atomic rename; a seat that drops it loses it silently, and a seat on a
+  harness with no quota swallows it. `DROVER_REFILL_SKIP_HARNESSES` keeps such seats out; `fleet-feed` re-queues any focus bean that still
+  has unchecked slices after the cooldown and skips beans assigned directly (ledger) inside it. A bean is done only when its boxes are ticked
+  on the remote main branch.
+- **Prove a landing on the remote by SUBJECT, not by SHA.** A rebase changes the SHA, so `merge-base --is-ancestor <old sha>` reports a landed
+  commit as missing. Use `git log <remote>/main --grep=<bean>` and read the subject. A report that says "closed/pushed" with a branch name is
+  not a landing.
+- **Every daemon writes a heartbeat; a silent log is DEAD.** `fleet-refill` logs every 10 ticks and kills any tick over 600 s with a SIGALRM
+  watchdog (the loop once went silent with no error and no restart). `fleet-cred-check` fails on a log older than 10 minutes and on a locked
+  login keychain. Anything new that loops forever does the same. Check: the log's mtime is under 10 minutes.
+- **Group fix items before dispatch.** `fleet-batch` merges queued fix items into one brief per (area, class) group, so one seat fixes, tests
+  and lands a whole group once instead of one gate run per item (hundreds of items meant hundreds of gate runs).
+- **Never read a rolling log's first line as its start.** A log that keeps its last N lines hides the real beginning: a "46 silent minutes"
+  report came from one. Name the window of any log before quoting a duration from it.
+- **Audit labels are claims.** A bean an audit pass labelled for a coder is verified on the remote main branch (`git log --grep`, read the
+  unchecked items in code) before dispatch. Seats on small-budget harnesses get one slice per dispatch.
+- **Report times in the owner's timezone.** Tool timestamps are UTC; convert before quoting.
+- **A lead's tool call that loops over a list or builds a path with a glob is a script, not an inline shell line.** Word-splitting differences
+  between shells broke six calls in one day under the earlier rule. A glob that can match two files is replaced by the exact path from
+  `git status --porcelain`. A "landed" line printed after `git commit` comes from `git log <remote>/main -1` after the push, never from
+  `is-ancestor HEAD` (an empty commit passes it). A shell-built permission or ARN-like value is read back before it is trusted.
+- **Deploy only when nothing is mid-render.** A restart costs that job its whole budget.
+**Metric:** credential BLOCKED reports per period = 0; assigns returning BLOCKED within 10 minutes = 0; daemon logs older than 10 minutes = 0.
+
+## Cadence rules (2026-10-13)
+> Imported from upstream drover. This fork does not ship `fleet-preflight` or `fleet-refill`.
+
+Evidence over a week: 1,289 code landings (87-395 a day); 56% of seat reports named a commit subject that was not on the main branch
+an hour later; a bare READY headline missed the hour 89% of the time; a work item assigned a third time across seats missed it 85% of the
+time; 88% of 1,395 dispatches in one day carried no work item; production was left about three hours behind main after the last landing.
+- **One publication mode, written once, read by every brief.** `publish-mode` is `direct` (seats land their own tested commits through the
+  pre-push hook; default) or `lander` (seats report READY and never push). Generated briefs take their LANDING paragraph from it; nobody
+  hand-writes "do not push". `fleet-preflight` is DEAD if the mode says lander while the lander is not installed and enabled, or says direct
+  while the lander's enable marker exists. A hand-written no-push line stayed in briefs for hours after the lander turned out not to run.
+- **Done is three levels, all by subject, never by SHA or a seat's word.** L1 LANDED: `git log origin/main --grep=<item>` shows the slice
+  subject. L2 DEPLOYED: the production version endpoint contains it. L3 MEASURED: the acceptance number is recorded. A report that says
+  pushed, closed or READY is a claim; only L1 and above count.
+- **A quiet screen is not idle.** `fleet-refill` holds (log line `HOLD`) any seat with a bean-named commit not on the main branch younger than
+  90 minutes. Pins are the operator's explicit exceptions; a pin on a seat with no task is a stall.
+- **Production may not lag main.** `fleet-preflight` is DEAD when the main branch has code commits production lacks for more than 90
+  minutes. Deploy, or record why not; a deploy script that says "tip moved, retry next tick" and never retries is not a deploy plan.
+- **One owner per coherent change.** Slice across seats only if the files are disjoint and every slice builds and passes its tests alone on
+  the main branch; the slice touching a shared contract (3+ importers, a schema, a prompt or rubric) goes first to the strongest seat and
+  is LANDED before dependent slices are dispatched. Small-budget seats get one small slice per dispatch.
+- **An item assigned a third time is escalated, not re-dispatched.** Before the third assign the lead records the latest blocker and the
+  owner transition on the item.
+- **Credentials**: `fleet-preflight` (every 10 minutes from the refill tick, and before every deploy) covers cloud, git host, keychain and
+  daemon heartbeats. A 12-hour cloud session needs a human: ask at the start of the day, not mid-delivery.
+- **Checks that can fail:** `fleet-preflight` exits 1; refill log lines `HOLD` and `PREFLIGHT`; metrics for the next retro: dispatches per
+  landed item (18 measured, target 4), reports with claimed subjects missing after an hour (56%, target < 15%), production lag minutes
+  (target < 90).
+
+## Landing is guaranteed by three machines, not by reminders (2026-10-13)
+> Imported from upstream drover. This fork does not ship its `fleet-done` landing gate, `fleet-branch-landed`, `fleet-preflight` or `fleet-refill`.
+
+Cause (measured): about 145 bean-named commits sat on seat branches overnight, and 56% of seat reports named a commit that was not on the
+main branch an hour later. Reminders did not hold; each of these can fail and acts.
+- **A seat cannot announce finished work that is unlanded.** In publish-mode=direct, `fleet-done` refuses DONE, PARTIAL and READY (exit 7,
+  delivered to the lead as BLOCKED "UNLANDED: ...") while the branch has bean-named commits that are not on the main branch BY SUBJECT
+  (`fleet-branch-landed`). BLOCKED and CHANGES are always allowed. The only escape is `FLEET_UNLANDED_OK="<reason>"`, which is written into
+  the report summary; a reason that is not a decision or a dependency is a defect. In lander mode the gate does not apply: READY is the
+  lander's input.
+- **The landing audit chases the rest.** Every 10 minutes `fleet-refill` finds every `fleet/<seat>-<bean>` branch (3 days) with unlanded
+  bean commits: at 30 minutes it nudges the owner ONCE per branch tip (log `NUDGE`; a seat that is mid-task is not nudged); at 60 minutes it
+  writes `alerts/unlanded.txt`.
+- **Preflight turns the 60-minute alert into DEAD.** `fleet-preflight` exits 1 while any branch has held unlanded bean commits for 60+
+  minutes; the lead lands or reassigns it that hour, and never closes a bean whose subjects are not on the main branch.
+- **Match by subject, never by SHA.** A rebase changes the SHA, so `merge-base --is-ancestor <old sha>` reports landed work as missing;
+  `fleet-branch-landed` greps the main branch for the commit's subject (first 70 characters, fixed string) and ignores commits that name no
+  bean (base noise from a local main) and `wip:` parking commits.
+- **Checks that can fail:** `fleet-branch-landed <branch>` (exit 1 + subjects), `fleet-done` exit 7, refill log `NUDGE`, `fleet-preflight`.
+  Tests: `tests/landing-gate.test.sh` (20 checks, three mutants fail it). **Metric:** reports with claimed subjects missing after an hour
+  (56% measured, target < 15%); unlanded bean commits older than 60 minutes (target 0).

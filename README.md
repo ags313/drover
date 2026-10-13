@@ -99,6 +99,11 @@ time.**
 `fleet-observe --board` gives a one-screen read of the fleet in observer mode, and observer ticks still
 stamp `state/last` so the tick-stall alert doesn't fire on a watcher that's running exactly as configured.
 
+[`docs/OPERATING-MODEL.md`](docs/OPERATING-MODEL.md) (from upstream drover) covers how to keep a fleet on a
+steady cadence: slice size, WIP limits, one owner per change, and done as landed, deployed and measured. It
+gives the numbers behind each rule and a check for each one. Its batch lander, refill daemon and publish
+mode are not part of this fork, as its first lines say.
+
 ## What one watcher tick does
 
 `fleet-watch run` ticks every 60 seconds (`FLEET_TICK`). In order:
