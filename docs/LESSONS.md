@@ -1287,3 +1287,29 @@ login keychain locks for background processes, which reads as a token expiry.
   `is-ancestor HEAD` (an empty commit passes it). A shell-built permission or ARN-like value is read back before it is trusted.
 - **Deploy only when nothing is mid-render.** A restart costs that job its whole budget.
 **Metric:** credential BLOCKED reports per period = 0; assigns returning BLOCKED within 10 minutes = 0; daemon logs older than 10 minutes = 0.
+
+## Cadence rules (2026-10-13)
+Evidence over a week: 1,289 code landings (87-395 a day); 56% of seat reports named a commit subject that was not on the main branch
+an hour later; a bare READY headline missed the hour 89% of the time; a work item assigned a third time across seats missed it 85% of the
+time; 88% of 1,395 dispatches in one day carried no work item; production was left about three hours behind main after the last landing.
+- **One publication mode, written once, read by every brief.** `publish-mode` is `direct` (seats land their own tested commits through the
+  pre-push hook; default) or `lander` (seats report READY and never push). Generated briefs take their LANDING paragraph from it; nobody
+  hand-writes "do not push". `fleet-preflight` is DEAD if the mode says lander while the lander is not installed and enabled, or says direct
+  while the lander's enable marker exists. A hand-written no-push line stayed in briefs for hours after the lander turned out not to run.
+- **Done is three levels, all by subject, never by SHA or a seat's word.** L1 LANDED: `git log origin/main --grep=<item>` shows the slice
+  subject. L2 DEPLOYED: the production version endpoint contains it. L3 MEASURED: the acceptance number is recorded. A report that says
+  pushed, closed or READY is a claim; only L1 and above count.
+- **A quiet screen is not idle.** `fleet-refill` holds (log line `HOLD`) any seat with a bean-named commit not on the main branch younger than
+  90 minutes. Pins are the operator's explicit exceptions; a pin on a seat with no task is a stall.
+- **Production may not lag main.** `fleet-preflight` is DEAD when the main branch has code commits production lacks for more than 90
+  minutes. Deploy, or record why not; a deploy script that says "tip moved, retry next tick" and never retries is not a deploy plan.
+- **One owner per coherent change.** Slice across seats only if the files are disjoint and every slice builds and passes its tests alone on
+  the main branch; the slice touching a shared contract (3+ importers, a schema, a prompt or rubric) goes first to the strongest seat and
+  is LANDED before dependent slices are dispatched. Small-budget seats get one small slice per dispatch.
+- **An item assigned a third time is escalated, not re-dispatched.** Before the third assign the lead records the latest blocker and the
+  owner transition on the item.
+- **Credentials**: `fleet-preflight` (every 10 minutes from the refill tick, and before every deploy) covers cloud, git host, keychain and
+  daemon heartbeats. A 12-hour cloud session needs a human: ask at the start of the day, not mid-delivery.
+- **Checks that can fail:** `fleet-preflight` exits 1; refill log lines `HOLD` and `PREFLIGHT`; metrics for the next retro: dispatches per
+  landed item (18 measured, target 4), reports with claimed subjects missing after an hour (56%, target < 15%), production lag minutes
+  (target < 90).

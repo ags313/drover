@@ -36,7 +36,7 @@ seat() {   # seat <agent> <bean> <file> <content> [base-ref]  -> branch fleet/<a
   git -C "$C" worktree remove --force "$wt"; git -C "$C" push -q origin "$br"
 }
 bl() { BL_REPO=$C BL_STATE=$S BL_WT_ROOT=$W/lander BL_LEDGER=$W/ledger BL_REPORTS=$W/reports \
-  BL_REQUIRE_APPROVED=0 BL_REQUIRE_REPORT=0 BL_GATE_CMD="$W/gate.sh" BL_NOTIFY_CMD=$W/notify.sh BL_BASELINE_CMD='[ ! -f BADBASE ]' BL_LINK_DIRS='node_modules backend/node_modules' DROVER_ENV_FAIL_RE='fixture (manifest|aliases)|separate build|(invalid|expired).*lease' "$@"; }
+  BL_REQUIRE_APPROVED=0 BL_REQUIRE_REPORT=0 BL_GATE_CMD="$W/gate.sh" BL_NOTIFY_CMD=$W/notify.sh BL_BASELINE_CMD='[ ! -f BADBASE ]' BL_LINK_DIRS='node_modules backend/node_modules' DROVER_NO_TESTDB_IF_SET='PREPUSH_BUILD_FIXTURES PREPUSH_DB_FIXTURES' DROVER_ENV_FAIL_RE='fixture (manifest|aliases)|separate build|(invalid|expired).*lease' "$@"; }
 ready() { BL_BRANCH_OF=fleet/$1-$2 bl "$BL" ready "$1" "$2" >/dev/null; }
 run() { bl "$BL" run "$@" 2>&1; }
 count() { local c; c=$(grep -c . "$1" 2>/dev/null); echo "${c:-0}"; }
@@ -267,32 +267,37 @@ mkdir -p "$S/batch-land.lock"; echo 999999 > "$S/batch-land.lock/pid"      # leg
 printf '#!/bin/sh\nif ! mkdir "%s/busy" 2>/dev/null; then echo OVERLAP >> "%s/overlap.log"; exit 1; fi\nsleep 2\necho gate >> "%s/gates.log"\nrmdir "%s/busy"\nexit 0\n' "$W" "$W" "$W" "$W" > "$W/gate.sh"
 : > "$W/overlap.log"
 for i in 1 2 3 4 5 6; do ( run >"$W/c$i.out" 2>&1 ) & done; wait
+# a live production lander on the same machine must survive this suite: the decoy's command line matches the old global pkill pattern
+bash -c 'sleep 9137 & echo $! > "$0"; wait' "$T/decoy.sleep" fleet-batch-land run &
+DECOY=$!
 eq "T20 no two gates overlapped" "$(count "$W/overlap.log")" 0
 eq "T20 exactly one push" "$(count "$W/pushes.log")" 1
 eq "T20 the others said they were locked out" "$(cat "$W"/c*.out | grep -c 'holds the lock')" 5
 new_world
 seat a b1 one.txt one; ready a b1
 printf '#!/bin/sh\necho $$ > "%s/gate.pid"\nsleep 3\nexit 0\n' "$W" > "$W/gate.sh"
-( run >"$W/k.out" 2>&1 ) & sleep 2
-lpid=$(pgrep -f "fleet-batch-land run" | head -1); [ -n "$lpid" ] && pkill -9 -f "fleet-batch-land run" ; wait 2>/dev/null
+( run >"$W/k.out" 2>&1 ) & KP=$!; sleep 2
+lpid=$(cat "$W"/lander/logs/run-*/pid 2>/dev/null | head -1); [ -n "$lpid" ] && kill -9 "$lpid"; wait "$KP" 2>/dev/null
 sleep 4
 out=$(run); has "T20 lock released by the kill; next run lands" "$out" "LANDED b1"
 
+eq "T20 (d) the suite kills only its own lander: the decoy lives" "$(kill -0 "$DECOY" 2>/dev/null && echo alive || echo dead)" alive
+kill "$DECOY" "$(cat "$T/decoy.sleep" 2>/dev/null)" 2>/dev/null
 echo "T21 (#5) SIGTERM kills the gate's whole process group before the lock is released"
 new_world
 seat a b1 one.txt one; ready a b1
-SLP=7$RANDOM$RANDOM
-printf '#!/bin/sh\n( sleep %s ) &\necho $$ > "%s/gate.pid"\nsleep %s\n' "$SLP" "$W" "$SLP" > "$W/gate.sh"
+SLP=$((7000 + RANDOM % 2000))
+printf '#!/bin/sh\n( sleep %s ) &\necho $! > "%s/gate.grandchild"\necho $$ > "%s/gate.pid"\nsleep %s\n' "$SLP" "$W" "$W" "$SLP" > "$W/gate.sh"
 ( run >"$W/t.out" 2>&1 ) &
 for i in $(seq 1 40); do [ -s "$W/gate.pid" ] && break; sleep 0.5; done          # wait until the gate is really running
 gp=$(cat "$W/gate.pid" 2>/dev/null)
 lander=$(cat "$W"/lander/logs/run-*/pid 2>/dev/null | head -1)      # the lander writes its own pid next to its logs
 kill -TERM "$lander"; sleep 3
 eq "T21 gate process is dead" "$(kill -0 "$gp" 2>/dev/null && echo alive || echo dead)" dead
-eq "T21 no stray grandchild left" "$(pgrep -f "sleep $SLP" | wc -l | tr -d ' ')" 0
+eq "T21 no stray grandchild left" "$(kill -0 "$(cat "$W/gate.grandchild")" 2>/dev/null && echo alive || echo dead)" dead
 eq "T21 nothing pushed" "$(count "$W/pushes.log")" 0
-eq "T21 READY kept" "$([ -f "$S/ready/b1" ] && echo y)" y
-pkill -f "sleep $SLP" 2>/dev/null; true
+eq "T21 READY kept" "$([ -f "$S/ready/b1" ] && echo y || { echo "n:$(cat "$W/t.out" | tr "\n" "|")"; })" y
+kill "$(cat "$W/gate.grandchild" 2>/dev/null)" 2>/dev/null; true
 
 echo "T22 (#7) fixture-manifest and lease errors are environment failures, not the branch's"
 for msg in "global fixture aliases conflict with separate build manifest" "separate build fixture manifest required" "invalid/expired finite DB lease"; do
@@ -328,6 +333,191 @@ eq "T24 not READY" "$([ -f "$S/ready/b1" ] && echo y || echo n)" n
 new_world
 seat a b1 one.txt one
 o=$(BL_BRANCH_OF=fleet/a-b1 bl "$BL" ready a b1 2>&1); has "T24 control: clean branch READY" "$o" "READY b1"
+
+echo "T25 (e) a fresh install carries every lander tool the watcher invokes"
+for tool in $(grep -o 'local/bin/fleet-batch-land' "$ROOT/bin/fleet-watch" | sort -u | sed 's#local/bin/##'); do
+  eq "T25 install.sh copies $tool" "$(grep -c "cp \"\$ROOT/bin/$tool\"" "$ROOT/install.sh")" 1
+  eq "T25 install.sh makes $tool executable" "$(grep -c "chmod +x.*\.local/bin/$tool" "$ROOT/install.sh")" 1
+done
+
+echo "T26 (b) batch mode honors land-paused, like the old landing paths do"
+new_world
+seat a b1 one.txt one; ready a b1
+touch "$S/land-paused"
+out=$(run); has "T26 run says it is paused" "$out" "land-paused"; eq "T26 no push while paused" "$(count "$W/pushes.log")" 0
+eq "T26 READY kept while paused" "$([ -f "$S/ready/b1" ] && echo y)" y
+out=$(BL_K=1 bl "$BL" tick 2>&1); eq "T26 tick lands nothing while paused" "$(count "$W/pushes.log")" 0
+out=$(run --dry); has "T26 --dry still allowed while paused" "$out" "DRY"
+rm -f "$S/land-paused"; out=$(run); has "T26 resumes when the pause is lifted" "$out" "LANDED b1"
+
+echo "T27 (c) a landed bean consumes its approval (it must stop counting as outstanding WIP); an unproven one keeps it"
+new_world
+seat a b1 one.txt one; seat b b2 two.txt two; ready a b1; ready b b2
+touch "$S/approved/b1" "$S/approved/b2"
+out=$(run)
+eq "T27 b1 approval consumed" "$([ -e "$S/approved/b1" ] && echo kept || echo gone)" gone
+eq "T27 b2 approval consumed" "$([ -e "$S/approved/b2" ] && echo kept || echo gone)" gone
+new_world
+seat a b1 one.txt one; ready a b1; touch "$S/approved/b1"
+out=$(BL_PUSH_CMD=true run)
+eq "T27 push did not stick: approval kept" "$([ -e "$S/approved/b1" ] && echo kept || echo gone)" kept
+
+echo "T28 (a) SIGKILL of the lander must not free the lock while its gate still runs: a second lander cannot start (no 4 s grace, no overlap)"
+new_world
+seat a b1 one.txt one; ready a b1
+printf '#!/bin/sh\nif ! mkdir "%s/busy" 2>/dev/null; then echo OVERLAP >> "%s/overlap.log"; exit 1; fi\necho $$ > "%s/gate.pid"\nsleep 5\necho gate >> "%s/gates.log"\nrmdir "%s/busy"\nexit 0\n' "$W" "$W" "$W" "$W" "$W" > "$W/gate.sh"
+: > "$W/overlap.log"
+( run >"$W/k.out" 2>&1 ) & KP=$!
+for i in $(seq 1 40); do [ -s "$W/gate.pid" ] && break; sleep 0.25; done
+lpid=$(cat "$W"/lander/logs/run-*/pid 2>/dev/null | head -1); kill -9 "$lpid"; wait "$KP" 2>/dev/null
+out=$(run); rc=$?                                   # immediately: the old gate (5 s) is still running
+has "T28 second lander is refused while the old gate lives" "$out" "still running"
+eq "T28 no overlapping gate" "$(count "$W/overlap.log")" 0
+eq "T28 nothing was pushed by the second lander" "$(count "$W/pushes.log")" 0
+for i in $(seq 1 40); do [ -d "$W/busy" ] || break; sleep 0.5; done
+out=$(run); has "T28 once the old gate has ended, landing works" "$out" "LANDED b1"
+
+echo "T29 (#2) the ownership marker dies with the worktree: replacing the worktree at the same path hands the lander no authority over its new occupant"
+new_world
+seat a b1 one.txt one; ready a b1; run >/dev/null
+git -C "$C" worktree remove --force "$W/lander/wt"
+git -C "$C" worktree add -q "$W/lander/wt" -b occupant origin/main
+echo precious > "$W/lander/wt/untracked.txt"; echo edit >> "$W/lander/wt/base.txt"
+seat b b2 two.txt two; ready b b2
+out=$(run)
+has "T29 refused as not owned" "$out" "not owned"
+eq "T29 occupant's untracked file intact" "$(cat "$W/lander/wt/untracked.txt" 2>/dev/null)" precious
+eq "T29 occupant's tracked edit intact" "$(grep -c '^edit$' "$W/lander/wt/base.txt")" 1
+eq "T29 nothing pushed by the second run" "$(count "$W/pushes.log")" 1
+
+echo "T30 (#1) the batch path injects no global test-database URL when a fixture manifest is supplied"
+for var in PREPUSH_DB_FIXTURES PREPUSH_BUILD_FIXTURES; do
+  new_world
+  mkdir -p "$C/scripts"; printf '#!/bin/sh\necho up >> "%s/dbup.log"\necho "export MIGRATION_TEST_DATABASE_URL=postgres://x/y_test"\necho "export TEMPLATE_PARITY_DATABASE_URL=postgres://x/y_test"\n' "$W" > "$C/scripts/test-db-up.sh"; chmod +x "$C/scripts/test-db-up.sh"
+  git -C "$C" add scripts; git -C "$C" commit -qm "db helper"; git -C "$C" push -q origin main
+  : > "$W/dbup.log"
+  seat a b1 one.txt one; ready a b1
+  printf '#!/bin/sh\necho "db=${MIGRATION_TEST_DATABASE_URL:-unset}" >> "%s/gate-env.log"\nexit 0\n' "$W" > "$W/gate.sh"; : > "$W/gate-env.log"
+  export "$var"=/nonexistent/manifest.json
+  out=$(BL_TESTDB_UP=scripts/test-db-up.sh run); unset "$var"
+  eq "T30 $var set: test-db-up not run" "$(count "$W/dbup.log")" 0
+  eq "T30 $var set: gate sees no injected URL" "$(cat "$W/gate-env.log")" "db=unset"
+done
+new_world
+mkdir -p "$C/scripts"; printf '#!/bin/sh\necho up >> "%s/dbup.log"\necho "export MIGRATION_TEST_DATABASE_URL=postgres://x/y_test"\necho "export TEMPLATE_PARITY_DATABASE_URL=postgres://x/y_test"\n' "$W" > "$C/scripts/test-db-up.sh"; chmod +x "$C/scripts/test-db-up.sh"
+git -C "$C" add scripts; git -C "$C" commit -qm "db helper"; git -C "$C" push -q origin main; : > "$W/dbup.log"
+seat a b1 one.txt one; ready a b1
+printf '#!/bin/sh\necho "db=${MIGRATION_TEST_DATABASE_URL:-unset}" >> "%s/gate-env.log"\nexit 0\n' "$W" > "$W/gate.sh"; : > "$W/gate-env.log"
+out=$(BL_TESTDB_UP=scripts/test-db-up.sh run)
+eq "T30 control, no manifest: test-db-up runs once" "$(count "$W/dbup.log")" 1
+eq "T30 control: gate sees the URL" "$(cat "$W/gate-env.log")" "db=postgres://x/y_test"
+
+echo "T31 (#10) a bean named only in a commit BODY does not register the commit under that bean's approval"
+new_world
+seat a b1 one.txt one
+wt=$W/shared; git -C "$C" worktree add -q "$wt" fleet/a-b1; echo two > "$wt/two.txt"; git -C "$wt" add -A
+git -C "$wt" commit -qm "feat(b2): unapproved change" -m "Depends on b1 and follows its approach."; git -C "$C" worktree remove --force "$wt"; git -C "$C" push -q origin fleet/a-b1
+o=$(BL_BRANCH_OF=fleet/a-b1 bl "$BL" ready a b1 2>&1); rc=$?
+eq "T31 body-only mention refused" "$([ $rc -ne 0 ] && echo y)" y; has "T31 names the offending commit" "$o" "unapproved change"
+new_world
+seat a b1 one.txt one
+mkdir -p "$W/bw"; git -C "$C" worktree add -q "$W/bw" fleet/a-b1; mkdir -p "$W/bw/.beans"; echo x > "$W/bw/.beans/b1--thing.md"; git -C "$W/bw" add -A; git -C "$W/bw" commit -qm "chore: record progress"; git -C "$C" worktree remove --force "$W/bw"; git -C "$C" push -q origin fleet/a-b1
+o=$(BL_BRANCH_OF=fleet/a-b1 bl "$BL" ready a b1 2>&1); has "T31 control: a commit that only touches the bean's own file is that bean's" "$o" "READY b1"
+
+echo "T32 (#9) a patch-equivalent second bean is recorded LANDED only if the fetched target really has its change"
+new_world
+seat a b1 one.txt same; seat b b2 one.txt same
+ready a b1; ready b b2
+out=$(BL_PUSH_CMD=true run)
+eq "T32 push did not stick: b1 not recorded" "$([ -e "$S/landed/b1" ] && echo y || echo n)" n
+eq "T32 push did not stick: b2 (skipped as equivalent) not recorded" "$([ -e "$S/landed/b2" ] && echo y || echo n)" n
+eq "T32 both stay READY for the retry" "$(ls "$S/ready" | wc -l | tr -d ' ')" 2
+hasnt "T32 never prints LANDED" "$out" "LANDED"
+new_world
+seat a b1 one.txt same; seat b b2 one.txt same
+ready a b1; ready b b2
+out=$(run)
+eq "T32 control: one push" "$(count "$W/pushes.log")" 1
+eq "T32 control: b1 landed" "$([ -s "$S/landed/b1" ] && echo y)" y
+eq "T32 control: b2 landed, proven against the fetched target" "$([ -s "$S/landed/b2" ] && echo y)" y
+has "T32 control: b2's proof says the target has it" "$(cat "$S/landed/b2")" "verified on origin/main"
+
+echo "T33 (#7) fixture/lease refusals are classified from the receipts the validator writes, not only from printed text"
+new_world
+seat a b1 one.txt one; ready a b1
+printf '#!/bin/sh\necho gate >> "%s/gates.log"\nmkdir -p "$BL_RECEIPT_DIR"; echo '"'"'{"code":"E_TARGET","message":"[redacted]"}'"'"' > "$BL_RECEIPT_DIR/failure.json"\necho "[pre-push] bounded lane gate refused (see retained job/JSON receipts; fixture values redacted)"\nexit 1\n' "$W" > "$W/gate.sh"
+out=$(run)
+has "T33 receipt-only refusal is ENV-FAIL" "$out" "ENV-FAIL"; hasnt "T33 nobody dropped for it" "$out" "DROPPED"
+eq "T33 READY kept" "$([ -f "$S/ready/b1" ] && echo y)" y; eq "T33 no push" "$(count "$W/pushes.log")" 0
+new_world
+seat a b1 one.txt one; ready a b1
+printf '#!/bin/sh\necho "[pre-push] bounded lane gate refused (see retained job/JSON receipts; fixture values redacted)"\nexit 1\n' > "$W/gate.sh"
+out=$(run); has "T33 the validator's generic refusal line alone is ENV-FAIL too" "$out" "ENV-FAIL"; hasnt "T33 ...and drops nobody" "$out" "DROPPED"
+new_world
+seat a b1 BAD broken; ready a b1
+out=$(run); has "T33 control: a real build failure is still the branch's" "$out" "DROPPED b1"
+
+echo "T34 (#8) the baseline covers the frontend build, and a test failure that names no file cannot yield a green baseline"
+mk_fe_world() {
+  new_world
+  mkdir -p "$C/backend" "$C/frontend" "$W/stubbin"; echo '{}' > "$C/backend/package.json"; echo '{}' > "$C/frontend/package.json"
+  [ -n "${1:-}" ] && : > "$C/frontend/BADFRONT"
+  git -C "$C" add -A; git -C "$C" commit -qm "projects"; git -C "$C" push -q origin main
+  printf '#!/bin/sh\n[ "$1" = run ] && [ -f BADFRONT ] && { echo "frontend build FAILED"; exit 1; }\nexit 0\n' > "$W/stubbin/npm"; chmod +x "$W/stubbin/npm"
+  printf '#!/bin/sh\nexit 0\n' > "$W/stubbin/npx"; chmod +x "$W/stubbin/npx"
+  printf '#!/bin/sh\necho gate >> "%s/gates.log"\nif [ -f frontend/BADFRONT ]; then echo "[pre-push] frontend build FAILED — push refused"; exit 1; fi\nexit 0\n' "$W" > "$W/gate.sh"
+}
+blx() { PATH="$W/stubbin:$PATH" BL_REPO=$C BL_STATE=$S BL_WT_ROOT=$W/lander BL_LEDGER=$W/ledger BL_REPORTS=$W/reports BL_REQUIRE_APPROVED=0 BL_REQUIRE_REPORT=0 BL_GATE_CMD="$W/gate.sh" BL_NOTIFY_CMD=$W/notify.sh BL_LINK_DIRS=none BL_BASELINE_CMD='for p in ${BL_BASELINE_PROJECTS:-backend frontend}; do [ -f "$p/package.json" ] || continue; ( cd "$p" && npm run build --silent ) || exit 1; done; for p in ${BL_BASELINE_PROJECTS:-backend frontend}; do [ -f "$p/package.json" ] && [ -n "$BL_FAILING_FILES" ] || continue; ( cd "$p" && NODE_OPTIONS=--experimental-vm-modules npx jest --runInBand --silent --passWithNoTests $BL_FAILING_FILES ) || exit 1; done' "$BL" "$@"; }
+mk_fe_world red
+seat a b1 one.txt one; seat b b2 two.txt two; BL_BRANCH_OF=fleet/a-b1 blx ready a b1 >/dev/null; BL_BRANCH_OF=fleet/b-b2 blx ready b b2 >/dev/null
+out=$(blx run 2>&1)
+has "T34 pre-existing frontend failure: baseline red" "$out" "BASELINE-RED"; hasnt "T34 innocent branches not dropped" "$out" "DROPPED"
+eq "T34 both READY" "$(ls "$S/ready" | wc -l | tr -d ' ')" 2
+mk_fe_world
+seat a b1 BAD broken; BL_BRANCH_OF=fleet/a-b1 blx ready a b1 >/dev/null
+printf '#!/bin/sh\nif [ -f BAD ]; then echo "backend tests FAILED"; exit 1; fi\nexit 0\n' > "$W/gate.sh"
+out=$(blx run 2>&1)
+has "T34 a test failure naming no file: cannot attribute, holds instead of dropping" "$out" "cannot attribute"; hasnt "T34 ...and drops nobody" "$out" "DROPPED"
+mk_fe_world
+seat a b1 BAD broken; BL_BRANCH_OF=fleet/a-b1 blx ready a b1 >/dev/null
+printf '#!/bin/sh\nif [ -f BAD ]; then echo "FAIL src/x.test.ts"; echo "backend tests FAILED"; exit 1; fi\nexit 0\n' > "$W/gate.sh"
+out=$(blx run 2>&1)
+has "T34 control: a named failing file, green baseline: the branch is dropped" "$out" "DROPPED b1"
+
+mk_fe_world
+seat a b1 BAD broken; BL_BRANCH_OF=fleet/a-b1 blx ready a b1 >/dev/null
+printf '#!/bin/sh\necho "$@" >> "%s/npx.log"\nexit 0\n' "$W" > "$W/stubbin/npx"; : > "$W/npx.log"
+printf '#!/bin/sh\nif [ -f BAD ]; then mkdir -p "$BL_RECEIPT_DIR"; echo '"'"'{"testResults":[{"name":"/x/frontend/src/only-in-receipt.test.tsx","status":"failed"}]}'"'"' > "$BL_RECEIPT_DIR/jest.json"; echo "backend tests FAILED"; exit 1; fi\nexit 0\n' > "$W/gate.sh"
+out=$(blx run 2>&1)
+has "T34 a failure held only in a jest receipt reaches the baseline run" "$(cat "$W/npx.log")" "src/only-in-receipt.test.tsx"
+has "T34 ...and the green baseline lets the branch be dropped" "$out" "DROPPED b1"
+
+echo "T35 the lander SIGKILLed between forking the gate child and the child taking the group lock: the orphan must not start a gate on the successor's worktree"
+new_world
+seat a b1 one.txt one; ready a b1
+printf '#!/bin/sh\necho started >> "%s/orphan-gate.log"\nsleep 1\nexit 0\n' "$W" > "$W/gate.sh"; : > "$W/orphan-gate.log"
+( BL_TEST_CHILD_DELAY=3 run >"$W/k.out" 2>&1 ) & KP=$!
+for i in $(seq 1 40); do ls "$W"/lander/logs/run-*/pid >/dev/null 2>&1 && break; sleep 0.1; done; sleep 1
+lpid=$(cat "$W"/lander/logs/run-*/pid 2>/dev/null | head -1); kill -9 "$lpid"; wait "$KP" 2>/dev/null
+sleep 4                                                   # the orphaned child wakes at 3 s
+eq "T35 the orphan did not run the gate" "$(count "$W/orphan-gate.log")" 0
+
+echo "T36 (N1) a lane-runner refusal that says a TEST failed is the branch's; a refusal about the fixtures is the environment's"
+new_world
+seat a b1 one.txt one; ready a b1
+printf '#!/bin/sh\nmkdir -p "$BL_RECEIPT_DIR"; echo '"'"'{"code":"E","message":"Jest failure/incomplete result"}'"'"' > "$BL_RECEIPT_DIR/failure.json"\necho "[pre-push] bounded lane gate refused (see retained job/JSON receipts; fixture values redacted)"\nexit 1\n' > "$W/gate.sh"
+out=$(run); has "T36 a jest-failure receipt drops the branch" "$out" "DROPPED b1"
+new_world
+seat a b1 one.txt one; ready a b1
+printf '#!/bin/sh\necho "FAIL src/x.test.ts"\necho "[pre-push] bounded lane gate refused (see retained job/JSON receipts; fixture values redacted)"\nexit 1\n' > "$W/gate.sh"
+out=$(run); has "T36 a refusal line next to a FAIL line is the branch's" "$out" "DROPPED b1"
+
+echo "T37 (N2) the baseline replays only the project the gate named: an unrelated red frontend must not block a backend regression"
+mk_fe_world red
+seat a b1 BAD broken; BL_BRANCH_OF=fleet/a-b1 blx ready a b1 >/dev/null
+printf '#!/bin/sh\nif [ -f BAD ]; then echo "backend build FAILED — push refused"; exit 1; fi\nexit 0\n' > "$W/gate.sh"
+out=$(blx run 2>&1)
+has "T37 backend regression is dropped although the frontend baseline is red" "$out" "DROPPED b1"; hasnt "T37 ...not BASELINE-RED" "$out" "BASELINE-RED"
 
 echo
 echo "fleet-batch-land: $PASS passed, $FAILN failed"

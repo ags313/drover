@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# fleet-preflight — the conditions the fleet silently depends on, each a check that can fail. Exit 1 if any is DEAD.
+# Run hourly (fleet-refill does, every 10 min), at the start and end of the day, and before every deploy.
+#   * publish mode vs lander state: the mode file says how seats publish; "lander" with no installed+enabled lander means seats were
+#     told not to push to a tool that does not run; "direct" with the enable marker present means the pre-push hook refuses their pushes
+#   * fleet-cred-check (credentials, daemon heartbeat, keychain)
+#   * production lag: the deployed commit (DROVER_PROD_VERSION_URL) may not trail the main branch by code commits older than
+#     DROVER_PROD_LAG_MIN minutes: landed code that is not deployed is a stall, not a plan
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/drover-env"
+bad=0
+ok(){ echo "ok    $*"; }; dead(){ echo "DEAD  $*"; bad=1; }
+mode=$(cat "$DROVER_PUBLISH_MODE_FILE" 2>/dev/null || echo direct)
+marker="$FLEET_STATE/batch-land-enabled"
+case "$mode" in
+  lander)
+    if [ -f "$marker" ] && [ -x "$DROVER_BIN/fleet-batch-land" ]; then ok "publish-mode=lander and the lander is installed+enabled"
+    else dead "publish-mode=lander but the lander is not installed/enabled: seats were told not to push (set direct: echo direct > $DROVER_PUBLISH_MODE_FILE)"; fi ;;
+  direct)
+    if [ ! -f "$marker" ]; then ok "publish-mode=direct (seats land their own commits)"
+    else dead "publish-mode=direct but $marker exists: the pre-push hook refuses seat pushes"; fi ;;
+  *) dead "publish-mode '$mode' is neither direct nor lander" ;;
+esac
+"$DROVER_BIN/fleet-cred-check" 2>&1 | grep -E "^(DEAD|WARN)"; "$DROVER_BIN/fleet-cred-check" >/dev/null 2>&1 || bad=1
+if [ -n "$DROVER_PROD_VERSION_URL" ] && [ -n "${DROVER_REPO:-}" ]; then
+  git -C "$DROVER_REPO" fetch -q origin main 2>/dev/null
+  prod=$(curl -s --max-time 10 "$DROVER_PROD_VERSION_URL" | grep -o '"sha" *: *"[a-f0-9]*"' | head -1 | grep -o '[a-f0-9]\{7,\}')
+  if [ -z "$prod" ]; then dead "production version unreadable ($DROVER_PROD_VERSION_URL)"; else
+    paths=(); [ -z "$DROVER_CODE_PATHS_LAG" ] || paths=(-- $DROVER_CODE_PATHS_LAG)
+    n=$(git -C "$DROVER_REPO" log "$prod..origin/main" --no-merges --format=%s "${paths[@]}" 2>/dev/null | wc -l | tr -d ' ')
+    old=$(git -C "$DROVER_REPO" log "$prod..origin/main" --no-merges --format=%ct "${paths[@]}" 2>/dev/null | tail -1)
+    if [ "${n:-0}" -gt 0 ] && [ -n "$old" ] && [ $(( $(date +%s) - old )) -gt $(( DROVER_PROD_LAG_MIN * 60 )) ]; then
+      dead "production ${prod:0:7} lags origin/main by $n code commits, oldest $(( ($(date +%s)-old)/60 )) min old: deploy or say why not"
+    else ok "production ${prod:0:7} within window ($n undeployed code commits)"; fi
+  fi
+fi
+exit $bad

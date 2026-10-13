@@ -15,7 +15,7 @@ import datetime as dt, glob, os, re, subprocess, sys, time
 def drover_env():
     """The same config every bash script sees: source drover-env (next to this file) and read it back."""
     env = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'drover-env')
-    keys = ['DROVER_REPO', 'FLEET_BRIEFS', 'FLEET_LEDGER', 'DROVER_BEAN_PREFIX', 'DROVER_CONFIG', 'DROVER_FOCUS_BEANS']
+    keys = ['DROVER_REPO', 'FLEET_BRIEFS', 'FLEET_LEDGER', 'DROVER_BEAN_PREFIX', 'DROVER_CONFIG', 'DROVER_FOCUS_BEANS', 'DROVER_PUBLISH_MODE_FILE', 'DROVER_TESTDB_UP']
     out = subprocess.run(['bash', '-c', '. "$0"; for k in "$@"; do printf "%s=%s\\0" "$k" "${!k:-}"; done', env, *keys],
                          capture_output=True, text=True, check=True).stdout
     return dict(kv.split('=', 1) for kv in out.split('\0') if '=' in kv)
@@ -82,9 +82,20 @@ for b in [l.strip() for l in open(FOCUS) if BEAN.fullmatch(l.strip())]:
     if open_n == 0:
         continue
     n += 1
+    # ONE publication mode, written once (DROVER_PUBLISH_MODE_FILE) and read by every generated brief: nobody hand-writes "do not push".
+    try:
+        mode = open(E['DROVER_PUBLISH_MODE_FILE']).read().strip() or 'direct'
+    except OSError:
+        mode = 'direct'
+    testdb = f" in the SAME shell eval \"$({E['DROVER_TESTDB_UP']})\";" if E.get('DROVER_TESTDB_UP') else ''
+    land = (f'LANDING (publish-mode=direct): when a slice is green, land it yourself: git fetch origin; git rebase --onto origin/main <your base> (replay only your commits);{testdb} '
+            f'git push origin HEAD:main (the pre-push hook is the gate; retry the rebase+push up to 3 times if main moved); prove it by subject: git log origin/main --grep=<bean>. '
+            f'A slice is not done until its subject is on origin/main.'
+            if mode == 'direct' else
+            'LANDING (publish-mode=lander): report READY with SHAs and never push main; the batch lander lands it.')
     scope = (f'Do the NEXT unchecked slices of {b} ({open_n} unchecked items outside LEAD/FOUNDER), one commit each, in order. First verify each is not already on '
-             f'origin/main (git log origin/main --grep={b}; match by subject: rebases change SHAs). Failing test first. Commit each slice on your branch, keep going, do NOT push '
-             f'(the batch lander lands READY branches; until it is enabled report READY with SHAs). Tick a box only with its proof.' + (f' Focus: {THEME}.' if THEME else ''))
+             f'origin/main (git log origin/main --grep={b}; match by subject: rebases change SHAs). Failing test first. Commit each slice on your branch and keep going. {land} '
+             f'Tick a box only with its proof.' + (f' Focus: {THEME}.' if THEME else ''))
     open(f'{Q}/{n:03d}-assign-{b}.txt', 'w').write('kind: any\n' + scope + '\n')
     print(f'queued {b} ({open_n} open)')
     if len(queued) + (n - 100) >= MAXQ:

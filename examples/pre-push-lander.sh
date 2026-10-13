@@ -24,3 +24,9 @@ fi
 #       if [[ -z "${MY_DB_URL:-}" && -z "${MY_FIXTURE_MANIFEST:-}" && -n "${DROVER_TESTDB_UP:-}" ]]; then
 #         if db_exports="$(cd "$root" && bash -c "$DROVER_TESTDB_UP" 2>>"$gate_log")"; then eval "$db_exports"; fi
 #       fi
+
+# 3. Let the lander see WHICH tests failed. When the gate's related-test run fails, copy its machine-readable result (jest-style JSON:
+#    testResults[].name/status) to $PREPUSH_EVIDENCE_DIR before your cleanup trap deletes it. fleet-batch-land exports that variable per
+#    gate and reads the failing file names back for its red-baseline check; without it a failure that names no file is held, not blamed.
+#
+#       [[ -z "${PREPUSH_EVIDENCE_DIR:-}" || ! -s "$jest_json" ]] || cp "$jest_json" "$PREPUSH_EVIDENCE_DIR/jest-related.json" 2>/dev/null || true

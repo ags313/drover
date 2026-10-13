@@ -11,7 +11,7 @@ Every poll (default 60 s):
      findings to the queue as fix items, which fleet-batch groups.
   3. Every 300 s fleet-batch groups fix items and fleet-feed restocks the queue from the focus beans.
   4. Ghost slot waiters (fleet-slot, parent init, cwd gone, > 10 min) are SIGTERMed and logged. Nothing else is killed.
-Only seats whose role is coder or reviewer are refilled; dedicated seats (DROVER_REFILL_DEDICATED) and seats on a dead
+Only seats whose role is coder or reviewer are refilled; a seat with a recent bean-named commit not yet on the main branch is mid-task and HELD, and a pinned seat (DROVER_PINS_FILE) is skipped; dedicated seats (DROVER_REFILL_DEDICATED) and seats on a dead
 harness (DROVER_REFILL_SKIP_HARNESSES: a harness whose quota is exhausted swallows queue items) are never sent work.
 Never sends faster than COOLDOWN per seat, never below MIN_FREE_GB of free disk. Reads only names/cwds, never argv.
 
@@ -31,7 +31,7 @@ def drover_env():
     here = os.path.dirname(os.path.abspath(__file__))
     env = os.path.join(here, 'drover-env')
     keys = ['DROVER_BIN', 'DROVER_HOME', 'DROVER_ROSTER', 'DROVER_BEAN_RE', 'FLEET_BRIEFS', 'FLEET_REPORTS', 'FLEET_REFILL_LOG',
-            'DROVER_REFILL_DEDICATED', 'DROVER_REFILL_SKIP_HARNESSES', 'DROVER_HUNT_AREAS']
+            'DROVER_REFILL_DEDICATED', 'DROVER_REFILL_SKIP_HARNESSES', 'DROVER_HUNT_AREAS', 'DROVER_WORKTREES', 'DROVER_PINS_FILE', 'DROVER_MID_TASK_MIN', 'FLEET_STATE']
     out = subprocess.run(['bash', '-c', '. "$0"; for k in "$@"; do printf "%s=%s\\0" "$k" "${!k:-}"; done', env, *keys],
                          capture_output=True, text=True, check=True).stdout
     return dict(kv.split('=', 1) for kv in out.split('\0') if '=' in kv)
@@ -65,6 +65,11 @@ FEED_EVERY = int(os.environ.get('REFILL_FEED_EVERY', '300'))
 TICK_LIMIT = int(os.environ.get('REFILL_TICK_LIMIT', '600'))
 HARD = re.compile(r'esc to interrupt|esc interrupt|Working \(|\(\d+m \d+s|\(\d+s ', re.I)   # live work: timers and the interrupt hint
 SOFT = re.compile(r'\b[1-9]\d* (shell|shells|monitor|monitors|task|tasks)\b|background terminal|still running|ctrl\+b to run in background', re.I)   # a background job may still run
+WORKTREES = E['DROVER_WORKTREES']
+PINS_FILE = E['DROVER_PINS_FILE']
+MID_TASK_S = int(E['DROVER_MID_TASK_MIN'] or '90') * 60
+STATE_DIR = E['FLEET_STATE']
+PRE_EVERY = int(os.environ.get('REFILL_PREFLIGHT_EVERY', '600'))
 ASSIGN_ITEM = re.compile(r'QUEUE \d*-?assign-(' + BEAN_RE + ')')
 
 AREAS = [a.strip() for a in E['DROVER_HUNT_AREAS'].split(';') if a.strip()]
@@ -161,6 +166,21 @@ def next_item(kind, seat, st, light=False):
     return f'HUNT #{n} {cls} / {area}' + (' [light]' if light else ''), body
 
 
+def mid_task(seat):
+    """A quiet screen is not idle. A seat whose branch carries a bean-named commit not on origin/main, the newest younger than
+    DROVER_MID_TASK_MIN, is mid-task: it is never fed new work (the daemon once pulled seats off unfinished work because their screens were quiet)."""
+    wt = f'{WORKTREES}/fleet-{seat}'
+    if not os.path.isdir(wt):
+        return False
+    r = run(['git', '-C', wt, 'log', 'origin/main..HEAD', '--no-merges', '--format=%ct %s'], timeout=15)
+    now = time.time()
+    for l in r.stdout.splitlines():
+        t, _, subj = l.partition(' ')
+        if t.isdigit() and now - int(t) < MID_TASK_S and re.search(BEAN_RE, subj) and not subj.startswith('wip:'):
+            return True
+    return False
+
+
 def reap_ghosts(dry):
     r = run(['pgrep', '-f', 'fleet-slot'])
     for pid in [int(x) for x in r.stdout.split() if x.isdigit()]:
@@ -196,6 +216,14 @@ def tick(dry):
     if free_gb < MIN_FREE_GB:
         log(f'DISK GUARD: only {free_gb:.1f} GB free (< {MIN_FREE_GB}): no new work sent')
         return
+    if now - st.get('pre', 0) > PRE_EVERY:              # the silent dependencies, each a check that can fail (mode vs lander, credentials, production lag)
+        st['pre'] = now
+        r = run([f'{BIN}/fleet-preflight'], timeout=90)
+        dead = [l for l in r.stdout.splitlines() if l.startswith('DEAD')]
+        os.makedirs(f'{STATE_DIR}/alerts', exist_ok=True)
+        open(f'{STATE_DIR}/alerts/preflight.txt', 'w').write('\n'.join(dead) + ('\n' if dead else ''))
+        for l in dead:
+            log('PREFLIGHT ' + l[:200])
     r = run([f'{BIN}/fleet-batch'])                    # group fix items by area so one seat fixes, tests and pushes a whole group once
     if r.returncode != 0:
         log(f'fleet-batch failed rc={r.returncode}: {r.stderr.strip()[:150]}')
@@ -210,7 +238,17 @@ def tick(dry):
     light = waiters > MAX_WAITERS
     if light:
         log(f'backpressure: {waiters} fleet-slot processes (> {MAX_WAITERS}): light work only, no queue fix items')
+    pins = set()
+    try:
+        pins = {l.split()[0] for l in open(PINS_FILE) if l.strip() and not l.startswith('#')}
+    except OSError:
+        pass
     for seat in SEATS:
+        if seat in pins:
+            continue
+        if mid_task(seat):
+            log(f'HOLD {seat}: unlanded bean commits in the last {MID_TASK_S // 60} min (mid-task, not idle)')
+            continue
         v = seat_view(seat)
         s = st['seats'].setdefault(seat, {'hash': '', 'same': 0, 'last_send': 0})
         if v is None:

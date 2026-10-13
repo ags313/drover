@@ -48,3 +48,11 @@ DROVER_FOCUS_BEANS="${DROVER_FOCUS_BEANS:-$HOME/.config/drover/focus-beans.txt}"
 DROVER_REFILL_DEDICATED="${DROVER_REFILL_DEDICATED:-}"           # seat names fleet-refill never sends queue work to
 DROVER_REFILL_SKIP_HARNESSES="${DROVER_REFILL_SKIP_HARNESSES:-}" # harnesses with no quota/login right now: their seats swallow queue items
 DROVER_HUNT_AREAS="${DROVER_HUNT_AREAS:-}"                       # ';'-separated areas for opt-in standing hunts (REFILL_HUNTS=1)
+
+# Publication mode, cadence checks. ONE file says how seats publish; every generated brief and fleet-preflight read it.
+DROVER_PUBLISH_MODE_FILE="${DROVER_PUBLISH_MODE_FILE:-$HOME/.config/drover/publish-mode}"   # 'direct' (default: seats land their own tested commits) or 'lander'
+DROVER_PINS_FILE="${DROVER_PINS_FILE:-$HOME/.config/drover/refill-pins}"                    # seats fleet-refill never feeds (lead's explicit exceptions), first field of each line
+DROVER_PROD_VERSION_URL="${DROVER_PROD_VERSION_URL:-}"   # optional: URL returning JSON with "sha":"<deployed commit>"; empty = skip the production-lag check
+DROVER_PROD_LAG_MIN="${DROVER_PROD_LAG_MIN:-90}"         # production may not lag the main branch by code commits older than this
+DROVER_CODE_PATHS_LAG="${DROVER_CODE_PATHS_LAG:-}"       # space-separated pathspecs that count as "code" for the lag check (empty = every path)
+DROVER_MID_TASK_MIN="${DROVER_MID_TASK_MIN:-90}"         # a seat with a bean-named commit not on main younger than this is mid-task, never idle

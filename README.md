@@ -133,7 +133,7 @@ stamp `state/last` so the tick-stall alert doesn't fire on a watcher that's runn
     `fleet-spec-feed`, which files one bean from a stuck epic or an orphan OpenSpec change. `fleet-refill` (a daemon,
     `launchd/dev.drover.fleet-refill.plist.in`) hands queued items to idle seats, `fleet-feed` restocks that queue from
     `DROVER_FOCUS_BEANS`, `fleet-batch` groups fix items, `fleet-prep` gives each assignment a clean branch, and
-    `fleet-cred-check` is the standup health check. Optional: `fleet-batch-land` lands every READY branch with one gate and one push.
+    `fleet-cred-check` is the standup health check. Optional: `fleet-batch-land` lands every READY branch with one gate and one push. `fleet-preflight` checks the publication mode, credentials and production lag; the operating model (work unit, WIP limits, definition of done, rhythm) is in `docs/OPERATING-MODEL.md`.
 13. **Push + land** (only with `DROVER_AUTOLAND=1`) — push first: the cumulative gate + push via
     `fleet-verify-main` (a red pauses landing, with the reason in `state/land-paused`); then one approved
     bean per tick to LOCAL main via `fleet-land-bean`, which yields while a push is in flight.

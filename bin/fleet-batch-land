@@ -46,7 +46,10 @@ BASELINE_CMD=${BL_BASELINE_CMD:-${DROVER_BUILD:-true}}
 TESTDB_UP=${BL_TESTDB_UP:-${DROVER_TESTDB_UP:-}}       # a command that prints `export NAME=value` lines for the gate's test database
 LINK_DIRS=${BL_LINK_DIRS:-${DROVER_BATCH_LINK_DIRS:-node_modules}}   # dependency dirs symlinked into the lander worktree
 ENABLED_MARKER=${BL_ENABLED_MARKER:-$STATE/batch-land-enabled}
+PAUSE_MARKER=${BL_PAUSE_MARKER:-$STATE/land-paused}       # the same switch the old landing paths honour: while it exists nothing lands
 LOCKFILE=${BL_LOCKFILE:-$STATE/batch-land.flock}
+GRPLOCK=${BL_GROUP_LOCKFILE:-$STATE/batch-land-group.flock}   # held by the gate/push process-group LEADER for as long as that group lives
+NO_TESTDB_IF_SET=${BL_NO_TESTDB_IF_SET:-${DROVER_NO_TESTDB_IF_SET:-}}   # names of variables that mean "no global test-database URL, on purpose"
 
 R() { git -C "$REPO" "$@"; }
 W() { git -C "$WT" "$@"; }
@@ -54,10 +57,17 @@ W() { git -C "$WT" "$@"; }
 wclean() { local d ex=(); for d in $LINK_DIRS; do ex+=(-e "$d"); done; assert_owned && W clean -fdq "${ex[@]}"; }
 wreset() { assert_owned && W reset -q --hard "$1" && wclean; }
 OWNER_TAG="fleet-batch-land worktree of $REPO"
-# never reset or clean a directory the lander did not create: refuse symlinks and anything without its ownership marker
+# The ownership marker lives INSIDE the worktree's own git dir (it dies with the worktree) and records the worktree directory's inode
+# and git dir. A marker outside would survive `git worktree remove` + a new worktree at the same path, and would then authorize
+# `reset --hard` / `clean` against a stranger's edits.
+inode_of() { stat -f %i "$1" 2>/dev/null || stat -c %i "$1" 2>/dev/null; }
+owner_stamp() { local gd; gd=$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null) || return 1; printf '%s|%s|%s' "$OWNER_TAG" "$(inode_of "$WT")" "$gd"; }
+# never reset or clean a directory the lander did not create: refuse symlinks and anything whose own git dir lacks the exact stamp
 assert_owned() {
-  [ -n "${WT:-}" ] && [ ! -L "$WT" ] && [ ! -L "$WTROOT" ] && [ -f "$WTROOT/wt.owner" ] && [ "$(cat "$WTROOT/wt.owner")" = "$OWNER_TAG" ] && [ -f "$WT/.git" ] && return 0
-  return 1
+  [ -n "${WT:-}" ] && [ ! -L "$WT" ] && [ ! -L "$WTROOT" ] && [ -f "$WT/.git" ] || return 1
+  local gd stamp; gd=$(git -C "$WT" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  stamp=$(owner_stamp) || return 1
+  [ -f "$gd/batch-land.owner" ] && [ "$(cat "$gd/batch-land.owner")" = "$stamp" ]
 }
 now() { date +%s; }
 say() { printf '%s\n' "$*"; }
@@ -93,7 +103,10 @@ cmd_ready() {
   # the approval, the report and the push gate all speak for ONE bean: a commit that does not name it is somebody else's work
   local foreign=""
   for c in $commits; do
-    if ! R log -1 --format=%B "$c" | grep -qiw -- "$bean" && ! R show --name-only --format= "$c" | grep -q "^\.beans/$bean--"; then
+    # only the SUBJECT speaks for a commit (a body that says "depends on <bean>" is a mention, not ownership); a commit that touches
+    # nothing but this bean's own file is also its own
+    local files; files=$(R show --name-only --format= "$c")
+    if ! R log -1 --format=%s "$c" | grep -qiw -- "$bean" && { [ -z "$files" ] || printf '%s\n' "$files" | grep -qv "^\.beans/$bean--"; }; then
       foreign="$foreign
   ${c:0:9} $(R log -1 --format=%s "$c")"
     fi
@@ -115,13 +128,21 @@ locked_run() {   # re-exec cmd_run under the lock
   return $rc
 }
 
-# run a command string in the worktree in its OWN process group, so a SIGTERM to the lander can kill the whole tree
+# run a command string in the worktree in its OWN process group, so a SIGTERM to the lander can kill the whole tree.
+# The group leader is `lockf` itself, holding GRPLOCK while the gate runs: if the lander is SIGKILLed the main lock is released
+# (lockf there exits with its child), but the gate group keeps running and keeps GRPLOCK, so a second lander refuses to start
+# (cmd_run checks it) instead of resetting the shared worktree under a live gate.
 CHILD=""
 run_group() {   # <logfile> <cmd>  -> RC
   set -m
-  ( cd "$WT" && export FLEET_BATCH_LANDER=1 BL_REMOTE="$REMOTE" BL_TARGET="$TARGET" && eval "$2" ) > "$1" 2>&1 &
+  local owner=$$
+  # The child takes GRPLOCK first and only then checks that the lander that launched it is still alive: a lander SIGKILLed between the
+  # fork and the lock leaves an orphan that wakes up after its successor took over, and that orphan must exit without running anything.
+  ( [ -z "${BL_TEST_CHILD_DELAY:-}" ] || sleep "$BL_TEST_CHILD_DELAY"      # test hook: widen the fork-to-lock window
+    cd "$WT" && export FLEET_BATCH_LANDER=1 BL_REMOTE="$REMOTE" BL_TARGET="$TARGET" BL_RECEIPT_DIR="${GATE_RECEIPTS:-}" PREPUSH_EVIDENCE_DIR="${GATE_RECEIPTS:-}" && exec lockf -k -t 0 "$GRPLOCK" bash -c 'kill -0 "$2" 2>/dev/null || exit 143; bash -c "$1"; exit $?' _ "$2" "$owner" ) > "$1" 2>&1 &
   CHILD=$!
   wait "$CHILD"; RC=$?
+  [ "$RC" -eq 75 ] && RC=143          # lockf could not take the group lock: nothing ran, so this is an environment failure, never a branch failure
   CHILD=""
   set +m
 }
@@ -215,6 +236,19 @@ restack_from() {
 }
 
 # ---------------------------------------------------------------- gate
+# A gate refusal is the environment's, not the branch's, when the printed text says so, when the fixture validator printed its
+# generic refusal (it keeps the details in receipts and prints nothing a regex could match), or when it left a failure.json receipt.
+is_env_failure() {  # <log> <receipt dir>
+  local rec; rec=$(find "$2" -name failure.json 2>/dev/null | head -1)
+  if [ -n "$rec" ]; then
+    # the lane runner writes failure.json for a failed Jest result too (same generic refusal line): read what it says
+    grep -Eqi 'jest failure|incomplete result|tests? failed' "$rec" 2>/dev/null && return 1
+    return 0
+  fi
+  grep -Eq "$ENV_FAIL_RE" "$1" 2>/dev/null && return 0
+  # the generic refusal alone is the environment's only when no test failure was printed next to it
+  grep -Eq 'bounded lane gate refused|refused before build' "$1" 2>/dev/null && ! grep -Eq 'tests? FAILED|^FAIL ' "$1" 2>/dev/null
+}
 GATE_N=0
 gate() {  # <tip> [force] -> 0 pass, 1 fail, 2 env failure. Memoised per tip unless force.
   local tip=$1 force=${2:-} log memo=$RUN/gate.${1}
@@ -223,9 +257,10 @@ gate() {  # <tip> [force] -> 0 pass, 1 fail, 2 env failure. Memoised per tip unl
   log=$LOGDIR/$(basename "$RUN")-gate$GATE_N-${tip:0:9}.log
   GATE_LOG=$log
   wreset "$tip" || { echo 2 > "$memo"; return 2; }
+  GATE_RECEIPTS=$RUN/receipts-gate$GATE_N; mkdir -p "$GATE_RECEIPTS"
   run_group "$log" "$GATE_CMD"
   local rc=$RC
-  if [ $rc -ne 0 ] && grep -Eq "$ENV_FAIL_RE" "$log"; then rc=2; fi
+  if [ $rc -ne 0 ] && is_env_failure "$log" "$GATE_RECEIPTS"; then rc=2; fi
   [ $rc -ge 128 ] && rc=2          # killed by a signal: the machine, not the branch
   [ $rc -gt 2 ] && rc=1
   echo "$rc" > "$memo"; echo "$GATE_N $tip $rc" >> "$RUN/gates"
@@ -241,11 +276,30 @@ baseline_check() {  # <failing gate log> -> 0 green, 1 red, 2 env
   BASELINE_DONE=1
   local log=$LOGDIR/$(basename "$RUN")-baseline.log
   BASELINE_LOG=$log
-  export BL_FAILING_FILES; BL_FAILING_FILES=$(grep -Eo "${DROVER_TEST_FILE_RE:-[A-Za-z0-9_./@-]+\\.(test|spec)\\.[a-z]+}" "${1:-/dev/null}" 2>/dev/null | sort -u | tr '\n' ' ')
+  # failing test files come from the gate's printed output AND from the jest-style JSON receipts it left (a failure held only in a
+  # receipt must not produce an empty list); paths are made project-relative for backend/ and frontend/ alike
+  local named receipts_named
+  named=$(grep -Eo "${DROVER_TEST_FILE_RE:-[A-Za-z0-9_./@-]+\\.(test|spec)\\.[a-z]+}" "${1:-/dev/null}" 2>/dev/null)
+  receipts_named=$(find "$RUN" -path '*/receipts-gate*' -name '*.json' 2>/dev/null | python3 -c '
+import sys, json
+for f in sys.stdin.read().split():
+    try: d = json.load(open(f))
+    except Exception: continue
+    for r in (d.get("testResults") or []) if isinstance(d, dict) else []:
+        if r.get("status") == "failed" and r.get("name"): print(r["name"])
+' 2>/dev/null)
+  # only the project(s) the gate blamed are replayed (BL_BASELINE_PROJECTS, for a BASELINE_CMD that loops over them): a red
+  # frontend must not block a backend regression. Unidentifiable = both.
+  export BL_BASELINE_PROJECTS; BL_BASELINE_PROJECTS=$(grep -Eio '(backend|frontend)[^|]*(FAILED|failed)|(FAIL|FAILED)[^|]*(backend|frontend)' "${1:-/dev/null}" 2>/dev/null | grep -Eio 'backend|frontend' | tr 'A-Z' 'a-z' | sort -u | tr '\n' ' ')
+  [ -n "$BL_BASELINE_PROJECTS" ] || BL_BASELINE_PROJECTS="backend frontend"
+  export BL_FAILING_FILES; BL_FAILING_FILES=$(printf '%s\n%s\n' "$named" "$receipts_named" | grep -v '^$' | sed -E 's#^.*/(backend|frontend)/##' | sort -u | tr '\n' ' ')
+  # a TEST failure that names no file cannot be re-checked on the baseline: an empty list would run nothing and read "green", which
+  # would blame an innocent branch. Hold instead.
+  if [ -z "$BL_FAILING_FILES" ] && grep -Eq 'tests? FAILED|^FAIL ' "${1:-/dev/null}" 2>/dev/null; then BASELINE_RC=6; return 6; fi
   wreset "$ORIGIN_TIP" || { BASELINE_RC=2; return 2; }
   run_group "$log" "$BASELINE_CMD"
   local rc=$RC
-  if [ $rc -ne 0 ] && grep -Eq "$ENV_FAIL_RE" "$log"; then rc=2; fi
+  if [ $rc -ne 0 ] && is_env_failure "$log" "$RUN/none"; then rc=2; fi
   [ $rc -ge 128 ] && rc=2
   [ $rc -gt 2 ] && rc=1
   BASELINE_RC=$rc; return $rc
@@ -262,6 +316,7 @@ settle() {
     [ $r -eq 2 ] && return 2
     baseline_check "$(gate_log_of "$tip")"; r=$?
     [ $r -eq 1 ] && return 5
+    [ $r -eq 6 ] && return 6
     [ $r -eq 2 ] && return 2
     lo=1; hi=$n
     while [ $lo -lt $hi ]; do
@@ -293,12 +348,16 @@ prove_and_record() {  # prints one PROOF line per landed seat commit; a bean is 
     ok=1; : > "$RUN/proof.$bean"
     while read -r s p; do
       [ -n "$s" ] || continue
-      if [ "$p" = "-" ]; then line="PROOF $bean ${s:0:9} -> already on $REMOTE/$TARGET (git cherry finds the same change before this batch)"
+      if [ "$p" = "-" ]; then
+        # "already on the target" was decided against the batch's own stack tip, which only exists locally. It is proven only if the
+        # FETCHED target now holds an equivalent change (git cherry: '-' = a patch-equivalent commit is upstream).
+        if [ "$(R cherry "$REMOTE/$TARGET" "$s" "$s^" 2>/dev/null | awk '{print $1}')" = "-" ]; then line="PROOF $bean ${s:0:9} -> change verified on $REMOTE/$TARGET (patch-equivalent commit present after the push)"
+        else line="PROOF $bean ${s:0:9} -> NOT on $REMOTE/$TARGET: ancestor-of $REMOTE/$TARGET: NO (skipped as already landed, but the fetched target has no equivalent)"; ok=0; bad=1; fi
       elif R merge-base --is-ancestor "$p" "$REMOTE/$TARGET"; then line="PROOF $bean ${s:0:9} -> ${p:0:9} ancestor-of $REMOTE/$TARGET: YES"
       else line="PROOF $bean ${s:0:9} -> ${p:0:9} ancestor-of $REMOTE/$TARGET: NO"; ok=0; bad=1; fi
       say "$line"; echo "$line" >> "$RUN/proof.$bean"
     done < "$RUN/map.$bean"
-    if [ $ok = 1 ]; then cp "$RUN/proof.$bean" "$STATE/landed/$bean"; rm -f "$STATE/ready/$bean"; ledger LANDED "$bean"; PROVEN="$PROVEN $bean"
+    if [ $ok = 1 ]; then cp "$RUN/proof.$bean" "$STATE/landed/$bean"; rm -f "$STATE/ready/$bean" "$STATE/approved/$bean"; ledger LANDED "$bean"; PROVEN="$PROVEN $bean"
     else say "NOT RECORDED $bean — proof failed, READY kept for the retry"; fi
   done
   return $bad
@@ -314,7 +373,7 @@ ensure_wt() {
     assert_owned || { say "ENV-FAIL $WT exists but is not owned by the lander (no ownership marker) — refusing to reset or clean it; remove it by hand if it is really ours"; return 1; }
   else
     R worktree add -q --detach "$WT" "$REMOTE/$TARGET" || { say "ENV-FAIL worktree add failed"; return 1; }
-    printf '%s\n' "$OWNER_TAG" > "$WTROOT/wt.owner"
+    owner_stamp > "$(git -C "$WT" rev-parse --absolute-git-dir)/batch-land.owner"
   fi
   local ld
   for ld in $LINK_DIRS; do
@@ -328,6 +387,8 @@ ensure_wt() {
 
 ensure_testdb() {  # the lander sets up the gate's test database itself - no seat needs a manual setup step
   [ -n "$TESTDB_UP" ] || return 0
+  # an operator-supplied fixture manifest means "no global database URL, on purpose": a fixture validator refuses a gate that has both
+  local v; for v in $NO_TESTDB_IF_SET; do [ -z "${!v:-}" ] || return 0; done
   [ -z "${BL_TESTDB_READY:-}" ] || return 0
   local out; out=$(cd "$WT" && bash -c "$TESTDB_UP" 2>"$RUN/testdb.err") || { say "ENV-FAIL test database setup failed: $(tail -3 "$RUN/testdb.err" | tr '\n' ' ')"; return 1; }
   eval "$out"
@@ -340,6 +401,8 @@ cmd_run() {
   trap on_term TERM INT HUP
   # the marker is the lead's switch: nothing may push main without it, and it is re-read right before the push
   if [ $dry = 0 ] && [ ! -f "$ENABLED_MARKER" ]; then say "batch lander not enabled ($ENABLED_MARKER missing) — not landing anything"; return 0; fi
+  if [ $dry = 0 ] && [ -f "$PAUSE_MARKER" ]; then say "landing is paused ($PAUSE_MARKER exists: land-paused) — not landing anything, READY records kept"; return 0; fi
+  lockf -k -t 0 "$GRPLOCK" true 2>/dev/null; if [ $? -eq 75 ]; then say "a previous gate/push is still running (group lock held) — not starting a second lander on the shared worktree, READY records kept"; return 0; fi
   RUN=$LOGDIR/run-$(date +%Y%m%dT%H%M%S)-$$; mkdir -p "$RUN"; echo $$ > "$RUN/pid"
   for bean in $(ls -tr "$STATE/ready" 2>/dev/null); do ready+=("$bean"); done
   n_ready=${#ready[@]}
@@ -363,12 +426,14 @@ cmd_run() {
     [ "${#ACTIVE[@]}" -gt 0 ] || { say "nothing landable after pick phase"; return 0; }
     settle; local sr=$?
     [ $sr -eq 2 ] && { say "ENV-FAIL gate could not run (log: $(gate_log_of "${TIPS[$((${#ACTIVE[@]}-1))]:-x}")) — no branch dropped, READY records kept"; return 3; }
+    [ $sr -eq 6 ] && { say "HOLD the gate failed on tests but names no failing file or receipt, so the failure cannot attribute to a branch (log: $(gate_log_of "${TIPS[$((${#ACTIVE[@]}-1))]:-x}")) — nobody dropped, READY records kept, nothing pushed"; return 3; }
     [ $sr -eq 5 ] && { say "BASELINE-RED $REMOTE/$TARGET fails the same checks without any READY branch (log: $BASELINE_LOG) — nobody dropped, READY records kept, nothing pushed"; return 3; }
     [ $sr -eq 1 ] && { say "every READY branch was dropped; nothing to push"; return 0; }
     local final=${TIPS[$((${#ACTIVE[@]}-1))]}
     say "STACK ${#ACTIVE[@]} branch(es) green at ${final:0:9}: ${ACTIVE[*]}  (gate runs: $GATE_N)"
     if [ $dry = 1 ]; then say "DRY — not pushing"; return 0; fi
     [ -f "$ENABLED_MARKER" ] || { say "ENV-FAIL enable marker removed while the gate ran — not pushing, READY records kept"; return 3; }
+    [ ! -f "$PAUSE_MARKER" ] || { say "landing was paused (land-paused) while the gate ran — not pushing, READY records kept"; return 3; }
     wreset "$final" || { say "ENV-FAIL cannot check out the green stack — not pushing"; return 3; }
     local plog=$RUN/push.log
     run_group "$plog" "$PUSH_CMD"

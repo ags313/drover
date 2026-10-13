@@ -69,6 +69,15 @@ DROVER_GENERATED="${DROVER_GENERATED:-}"
 # DROVER_ENV_FAIL_RE="${DROVER_ENV_FAIL_RE:-}"        # extra gate-log patterns that mean "the machine failed, not the branch"
 # DROVER_BATCH_LINK_DIRS="${DROVER_BATCH_LINK_DIRS:-node_modules}"   # dependency dirs symlinked into the lander worktree
 
+# Publication mode and cadence checks (docs/OPERATING-MODEL.md). The mode file holds 'direct' (default) or 'lander'.
+# DROVER_PUBLISH_MODE_FILE="${DROVER_PUBLISH_MODE_FILE:-$HOME/.config/drover/publish-mode}"
+# DROVER_PINS_FILE="${DROVER_PINS_FILE:-$HOME/.config/drover/refill-pins}"   # seats fleet-refill never feeds
+# DROVER_PROD_VERSION_URL=''        # URL returning JSON with "sha":"<deployed commit>"; enables the production-lag check
+# DROVER_PROD_LAG_MIN=90            # minutes landed code may stay undeployed before fleet-preflight says DEAD
+# DROVER_CODE_PATHS_LAG=''          # pathspecs that count as code for that check, e.g. 'src app'
+# DROVER_MID_TASK_MIN=90            # a seat with a bean-named commit not on main younger than this is held, not refilled
+# DROVER_NO_TESTDB_IF_SET=''        # variable names (e.g. your fixture-manifest vars) that mean the lander must not set up a global test DB
+
 # Optional overrides (defaults shown).
 # DROVER_HOME="${DROVER_HOME:-$HOME/.local/share/drover}"       # queue, inbox, tasks, reports, state
 # DROVER_WORKTREES="${DROVER_WORKTREES:-$HOME/.herdr/worktrees/<basename of DROVER_REPO>}"
