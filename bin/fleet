@@ -728,15 +728,13 @@ cmd_assign() {
   wt=$(cwd_of "$coder"); bbranch="fleet/$coder-$bean"
   if [ -d "$wt" ]; then
     cur=$(git -C "$wt" branch --show-current 2>/dev/null)
-    if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null | grep -v '^??' || true)" ]; then
-      echo "NOTE: $coder's worktree has uncommitted tracked changes — staying on '$cur'. Not switching to $bbranch; a branch switch must never discard work." >&2
-    elif [ "$cur" != "$bbranch" ]; then
-      git -C "$wt" fetch "${DROVER_REMOTE}" ${DROVER_MAIN_BRANCH} --quiet 2>/dev/null || true
-      if git -C "$wt" checkout -B "$bbranch" ${DROVER_UPSTREAM} --quiet 2>/dev/null; then
-        echo "branch: $coder -> $bbranch (forked from ${DROVER_UPSTREAM})" >&2
-      else
-        echo "NOTE: could not put $coder on $bbranch; it stays on '$cur'" >&2
-      fi
+    # A seat with leftover work used to stay on its old branch, dirty, so the brief's merge refused to overwrite
+    # files and the seat reported BLOCKED (fleet assign forum-ixrd codex-coder, 2026-10-13). And `checkout -B`
+    # reset an existing bean branch to main, orphaning its reviewed commits. fleet-prep PARKS leftovers on a
+    # wip/ branch (a commit: nothing is discarded), RESUMES an existing bean branch, else cuts it from main.
+    # Already on this bean's branch = mid-work: never park. Never touch the shared checkout.
+    if [ "$cur" != "$bbranch" ] && [ "$(cd "$wt" && pwd -P)" != "$(cd "$FLEET_ROOT" && pwd -P)" ]; then
+      "$DROVER_BIN/fleet-prep" "$coder" "$bean" "$wt" >&2 || echo "NOTE: fleet-prep failed for $coder; it stays on '$(git -C "$wt" branch --show-current 2>/dev/null)'" >&2
     fi
   fi
   bf="$BRIEFS/assign-$coder-$bean.txt"

@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# fleet-prep <seat> <bean> [worktree] — put a seat's worktree on fleet/<seat>-<bean> before it is briefed.
+#   * leftover work in the tree is PARKED on a wip/<seat>-<time> branch (a commit: nothing is discarded)
+#   * an existing fleet/<seat>-<bean> branch is RESUMED, never reset (a reset to main orphaned reviewed commits)
+#   * otherwise the branch is cut from $DROVER_UPSTREAM, so the bean file exists and the tree is clean; a bean
+#     committed to local $DROVER_MAIN_BRANCH but not pushed yet is cut from local $DROVER_MAIN_BRANCH instead
+#   * a seat already on its bean branch is mid-work: left exactly as it is, dirty or not
+#   * the shared checkout (DROVER_REPO), or a checkout of another repository, is refused
+# Default worktree: $DROVER_WORKTREES/fleet-<seat>. `fleet assign` calls this with the seat's pane cwd; run it by
+# hand to recover a seat that reported BLOCKED on a dirty tree. Ported from upstream drover e6d9d54.
+set -euo pipefail
+# shellcheck source=drover-env
+. "$(dirname "$0")/drover-env"
+[ $# -ge 2 ] || { echo "usage: fleet-prep <seat> <bean> [worktree]" >&2; exit 64; }
+[ -n "${DROVER_REPO:-}" ] || { echo "fleet-prep: set DROVER_REPO (env or $DROVER_CONFIG)" >&2; exit 2; }
+seat=$1 bean=$2 wt=${3:-$DROVER_WORKTREES/fleet-$1} br="fleet/$1-$2"
+[ -d "$wt" ] || { echo "fleet-prep: no worktree $wt" >&2; exit 2; }
+cd "$wt"
+top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "fleet-prep: $wt is not a git checkout" >&2; exit 2; }
+[ "$(cd "$top" && pwd -P)" != "$(cd "$DROVER_REPO" && pwd -P)" ] || { echo "fleet-prep: refusing: $wt is the shared checkout" >&2; exit 2; }
+[ "$(cd "$(git rev-parse --path-format=absolute --git-common-dir)" && pwd -P)" = \
+  "$(cd "$(git -C "$DROVER_REPO" rev-parse --path-format=absolute --git-common-dir)" && pwd -P)" ] \
+  || { echo "fleet-prep: refusing: $wt is not a worktree of $DROVER_REPO" >&2; exit 2; }
+cd "$top"
+if [ "$(git branch --show-current)" = "$br" ]; then echo "$seat already on $br (mid-work: left as it is)"; exit 0; fi
+
+# Resolve the base BEFORE touching the tree: a bean with no file anywhere must not leave the seat parked on wip/.
+on(){ [ -n "$(git ls-tree --name-only "$1" -- .beans/ 2>/dev/null | grep -m1 "^\.beans/$bean--" || true)" ]; }
+base=""
+if ! git show-ref --verify -q "refs/heads/$br"; then
+  git -C "$DROVER_REPO" fetch -q "$DROVER_REMOTE" "$DROVER_MAIN_BRANCH" 2>/dev/null \
+    || echo "fleet-prep: fetch $DROVER_REMOTE $DROVER_MAIN_BRANCH failed; using $DROVER_UPSTREAM as it is" >&2
+  if on "$DROVER_UPSTREAM"; then base=$DROVER_UPSTREAM
+  elif on "$DROVER_MAIN_BRANCH"; then base=$DROVER_MAIN_BRANCH
+    echo "fleet-prep: $bean is not on $DROVER_UPSTREAM yet; cutting $br from local $DROVER_MAIN_BRANCH" >&2
+  else echo "fleet-prep: no bean file for $bean on $DROVER_UPSTREAM or $DROVER_MAIN_BRANCH; $wt left as it is" >&2; exit 1; fi
+fi
+
+if [ -n "$(git status --porcelain)" ]; then
+  w="wip/$seat-$(date +%Y%m%d%H%M%S)"; git switch -q -c "$w"
+  git add -A; git -c core.hooksPath=/dev/null commit -q --no-verify -m "wip: $seat leftover before $bean (parked by fleet-prep)"
+  echo "parked leftover work on $w"
+fi
+if [ -z "$base" ]; then git switch -q "$br"; else git switch -q -c "$br" "$base"; fi
+ls .beans/"$bean"--* >/dev/null 2>&1 || { echo "fleet-prep: $br has no bean file for $bean" >&2; exit 1; }
+echo "$seat ready on $br @ $(git rev-parse --short HEAD)${base:+ (cut from $base)}"

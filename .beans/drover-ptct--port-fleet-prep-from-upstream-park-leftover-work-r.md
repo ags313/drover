@@ -5,7 +5,7 @@ status: todo
 type: task
 priority: normal
 created_at: 2026-10-13T21:08:07Z
-updated_at: 2026-10-13T21:08:07Z
+updated_at: 2026-10-13T21:14:07Z
 ---
 
 Port `bin/fleet-prep` from upstream (remote `origin` = andrebrov/drover, commit e6d9d54 "Port 2026-10-12 fleet changes"), and its hook in `fleet assign` (the `bin/fleet` hunk of that commit). Nothing else from that commit.
@@ -25,6 +25,6 @@ Adapt to this fork:
 Tests: an eval case in `eval/` next to the existing ones: a worktree with an untracked and a modified file gets parked on a wip branch and ends on the bean branch at the upstream main tip; a worktree already on the bean branch is left alone; the shared checkout is refused.
 
 Acceptance:
-- [ ] `fleet assign` on a seat with leftover work parks it and briefs on a clean bean branch
-- [ ] `fleet-prep` by hand recovers a seat that reported BLOCKED on a dirty tree
-- [ ] eval case green; README one paragraph
+- [x] `fleet assign` on a seat with leftover work parks it and briefs on a clean bean branch
+- [x] `fleet-prep` by hand recovers a seat that reported BLOCKED on a dirty tree
+- [x] eval case green; README one paragraph

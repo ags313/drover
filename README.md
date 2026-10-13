@@ -312,6 +312,7 @@ scripts call each other by absolute path, so only your interactive shell is affe
 |---|---|
 | `fleet` | Roster, spawn (`up`), `assign`, `review`, `followup`, `land`, `sync`, `rules`, `models`, `usage`, `stale`, and pane helpers (`read`, `keys`, `wait`, `cancel`, `blocked`). `fleet --help`, and `--dry-run` on every mutating verb. |
 | `fleet-watch` | The loop. `run`, `once`, `enqueue <bean>`, `queue`, `unpark <bean>` (lift a BLOCKED park), `dispatch` (one drain + top-up + refill pass). |
+| `fleet-prep <seat> <bean> [worktree]` | Put a seat's worktree on `fleet/<seat>-<bean>` before its brief (`fleet assign` runs it). Details below the table. |
 | `fleet-land-bean` | Land ONE approved bean to LOCAL main: cherry-pick its own branch in an isolated worktree, gate, ff-only. Never pushes. Used by auto-land; run by hand too. |
 | `fleet-verify-main` | The cumulative merge-queue gate: full build+suite on a clean detached worktree at a ref. Exit 0 = safe to push. |
 | `fleet-push` | The only sanctioned push: runs `fleet-verify-main`, pushes local main to origin only if green. Never force. |
@@ -347,6 +348,15 @@ scripts call each other by absolute path, so only your interactive shell is affe
 | `fleet-heal-drift` | One-off repair for a `.beans` board that drifted from what a batch of lands actually did; backs up before writing. |
 | `fleet-alert` | `send`, `check` (tick-stall, low disk, an optional MCP-footprint leak guard), `heartbeat` (for a periodic job). Used by the background land/push loop so a self-pause still wakes someone. |
 | `graphify-nightly` | No-op unless `graphify` is on PATH; else rebuilds the repo's knowledge graph (see `docs/LESSONS.md`, "Finding code"). Wired to `launchd/dev.drover.graphify-nightly.plist.in` and `systemd/drover-graphify-nightly.timer.in`. |
+
+`fleet assign` runs `fleet-prep` before it writes the brief, so every bean starts on a clean branch of its own. If the
+seat's worktree has leftover work (modified or untracked files), it is committed to a new `wip/<seat>-<time>`
+branch, so nothing is discarded and the human can look at it later. An existing `fleet/<seat>-<bean>` branch is
+resumed, never reset. Otherwise the branch is cut from `$DROVER_UPSTREAM`, or from local `$DROVER_MAIN_BRANCH` when
+the bean has not been pushed yet. A seat already on its bean's branch is mid-work and is left exactly as it is. The
+shared checkout (`DROVER_REPO`) is refused. Without it a dirty seat stayed on its old branch and reported BLOCKED
+when the brief's merge would not overwrite its files. To recover such a seat by hand, run
+`fleet-prep <seat> <bean>` (the default worktree is `$DROVER_WORKTREES/fleet-<seat>`), then `fleet assign` again.
 
 ## Configuration
 
