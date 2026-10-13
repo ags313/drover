@@ -106,7 +106,8 @@ def sh(*a, timeout=20, cwd=None):
 
 
 def git(*a):
-    return sh('git', '-C', REPO, *a).strip()
+    # core.quotepath=false: a path with a non-ASCII byte comes back as itself, not quoted and octal-escaped
+    return sh('git', '-c', 'core.quotepath=false', '-C', REPO, *a).strip()
 
 
 # The pane ends in the harness's own API error (the turn was dropped), not in a question or a finish.
@@ -260,7 +261,7 @@ def check():
             if not bf:
                 # the shared checkout can lag origin/main right after a push from another worktree: a bean filed
                 # minutes ago looked nonexistent and its owner was reaped. Ask main.
-                onmain = subprocess.run(['git', '-C', REPO, 'ls-tree', '--name-only', UPSTREAM, '.beans/'],
+                onmain = subprocess.run(['git', '-c', 'core.quotepath=false', '-C', REPO, 'ls-tree', '--name-only', UPSTREAM, '.beans/'],
                                         capture_output=True, text=True, timeout=30).stdout
                 if f'/{b}-' in onmain:
                     continue

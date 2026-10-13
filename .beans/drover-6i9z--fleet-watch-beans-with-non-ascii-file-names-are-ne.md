@@ -5,7 +5,7 @@ status: todo
 type: bug
 priority: normal
 created_at: 2026-10-13T02:01:34Z
-updated_at: 2026-10-13T02:01:34Z
+updated_at: 2026-10-13T02:08:22Z
 ---
 
 fleet-watch top-up skips a bean whose file name holds a non-ASCII character ("not on main (commit the bean file first)"), although the file is committed on main. Seen 2026-10-13 for forum-1avw (`.beans/forum-1avw--auto-groups-dowódca-...md`) and panel2-wrl3 (`...béret...md`): both skipped on every tick for hours.
@@ -17,5 +17,5 @@ Fix: `git -c core.quotepath=false ls-files .beans` (or `ls-files -z` with a NUL-
 Workaround applied on the lead's machine: `git config core.quotepath false` in the forum and panel2 checkouts.
 
 Acceptance:
-- [ ] a bean with a non-ASCII file name is queued on the first tick (eval case)
-- [ ] no other `git ls-files`/`ls-tree` name match in bin/ depends on quotepath
+- [x] a bean with a non-ASCII file name is queued on the first tick (eval case)
+- [x] no other `git ls-files`/`ls-tree` name match in bin/ depends on quotepath

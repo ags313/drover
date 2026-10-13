@@ -2,8 +2,8 @@
 # eval-checkers — known-good and known-bad cases for the deterministic checkers, on a scratch repo.
 #
 # Every instrument ships with a case it must fire on AND a case it must stay quiet on (docs/LESSONS.md):
-#   fleet-landed-check   completed bean with no landed code -> UNPROVEN; landed by commit / by named SHA /
-#                        `Landed: none` -> quiet
+#   fleet-landed-check   completed bean with no landed code -> UNPROVEN (also under a non-ASCII file name);
+#                        landed by commit / by named SHA / `Landed: none` -> quiet
 #   fleet-review-check   a CLI banner with no review -> EMPTY; a grounded review, or a seat report whose name
 #                        merely contains "reviewer" -> quiet
 #   fleet-claim reap     a claim on a bean missing from main: under 24h kept, older released
@@ -26,6 +26,8 @@
 #   push batching        defaults: 1 ahead -> push; DROVER_PUSH_MIN_AHEAD=3: 2 ahead -> no push, 3 -> push; 1 ahead
 #                        older than DROVER_PUSH_MAX_WAIT_MIN -> push, a fresh one -> no push; MIN_AHEAD=5: five real
 #                        fleet-land-bean lands with an auto-push pass after each -> exactly one verify+push
+#   non-ASCII bean names a bean file named with ó/é in a repo with core.quotepath=true -> dispatched on the first pass
+#                        (also when the caller already sets core.quotepath=true, repeated, in GIT_CONFIG_COUNT)
 # No network, no keys. Exit 1 on the first wrong answer.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")/../bin" && pwd)"
@@ -61,10 +63,13 @@ git checkout -qb side; echo x > src/b.txt; git add -A; git commit -qm side; side
 git checkout -q main; bean bean-bad2 completed "Landed in $side."; git add -A; git commit -qm 'chore(beans): close'
 # bean-todo: not completed -> never checked
 bean bean-todo todo; git add -A; git commit -qm 'chore(beans): file'
+# bean-bad3: bean-bad1 under a non-ASCII file name. git quoted it ("...dow\303\263dca.md"), the .md test failed
+# and the bean was never audited.
+printf -- '---\ntitle: bean-bad3\nstatus: completed\n---\n' > .beans/bean-bad3--dowódca.md; git add -A; git commit -qm 'chore(beans): close bean-bad3'
 git push -q origin main; git fetch -q origin
 
 out=$("$BIN"/fleet-landed-check --hours 24); rc=$?
-for b in bean-bad1 bean-bad2; do grep -q "^UNPROVEN $b:" <<<"$out" && ok "landed-check fires on $b" || bad "landed-check missed $b"; done
+for b in bean-bad1 bean-bad2 bean-bad3; do grep -q "^UNPROVEN $b:" <<<"$out" && ok "landed-check fires on $b" || bad "landed-check missed $b"; done
 for b in bean-good1 bean-good2 bean-good3 bean-todo; do grep -q "$b" <<<"$out" && bad "landed-check flagged $b" || ok "landed-check quiet on $b"; done
 [ "$rc" = 1 ] && ok "landed-check exit 1 on violations" || bad "landed-check exit $rc"
 
@@ -344,5 +349,28 @@ answer 'HUMAN: needs prod credentials'; dpass; reap
 answer 'HUMAN: needs prod credentials'; dpass; reap
 grep -q '^REPEAT ' "$T/dw/state/parked/$bid" 2>/dev/null && [ "$(nd)" = 5 ] && [ "$(bst)" = in-progress ] \
   && ok 'ghost-reap leaves a REPEAT park alone' || bad "ghost-reap REPEAT park: status=$(bst) $(dstate) reap: $(head -c 200 "$T/g.out")"
+
+# --- non-ASCII bean file names: git's core.quotepath=true printed ".beans/x--dow\303\263dca.md", the name match
+# in refill failed and the bean was skipped as "not on main" every tick (forum-1avw, panel2-wrl3). The repo sets
+# quotepath=true itself, so the case fires whatever the host config says. Same stub coder as the park case.
+git init -q -b main "$T/ub"
+( cd "$T/ub" && git config user.email e@x.invalid && git config user.name e && git config core.quotepath true && beans init >/dev/null \
+  && beans create 'auto groups' -t task -s todo >/dev/null && for f in .beans/*--*.md; do mv "$f" "${f%%--*}--auto-groups-dowódca-béret.md"; done \
+  && git add -A && git commit -qm bean )
+uid=$(ls "$T/ub/.beans" | sed -n 's/--.*//p' | head -1)
+upass(){ ( cd "$T/ub" && env -u DROVER_PROJECT DROVER_REPO="$T/ub" FLEET_QUEUE="$T/uq" FLEET_INBOX="$T/uin" FLEET_TASKS="$T/utasks" \
+  FLEET_STATE="$T/uw/state" DISPATCHES="$T/udispatches" "$T/dbin/fleet-watch" dispatch >/dev/null 2>"$T/u.err" ); }
+upass
+[ "$(cat "$T/udispatches" 2>/dev/null)" = "$uid" ] && ok 'a bean file named with ó/é is dispatched on the first pass' \
+  || bad "non-ASCII bean: dispatches='$(cat "$T/udispatches" 2>/dev/null)' $(grep -E 'SKIP|QUEUE' "$T/uw/watch.log" 2>/dev/null | tail -2 | tr '\n' ' ') err: $(head -c 300 "$T/u.err")"
+# The caller's environment already lists core.quotepath=true twice (git takes the last; keys are case-insensitive)
+# plus an unrelated user.name. drover-env, sourced twice, must leave quotepath false, the name matcher working,
+# user.name kept, and exactly one entry added. Overwriting only the first match left the second true (review).
+out=$(cd "$T/ub" && env GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=core.quotepath GIT_CONFIG_VALUE_0=true GIT_CONFIG_KEY_1=user.name \
+  GIT_CONFIG_VALUE_1=caller GIT_CONFIG_KEY_2=Core.QuotePath GIT_CONFIG_VALUE_2=true \
+  bash -c '. "$0"; . "$0"; printf "%s %s %s " "$(git config --get core.quotepath)" "$(git config --get user.name)" "$GIT_CONFIG_COUNT"
+  git ls-files .beans | grep -m1 "^.beans/$1--"' "$BIN/drover-env" "$uid" 2>/dev/null)
+[ "$out" = "false caller 4 .beans/$uid--auto-groups-dowódca-béret.md" ] && ok 'inherited repeated core.quotepath=true entries: still false, name matches, caller entry kept' \
+  || bad "inherited quotepath entries: '$out'"
 
 [ "$fail" = 0 ] && echo 'all checker cases pass' || { echo 'checker cases FAILED'; exit 1; }

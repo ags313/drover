@@ -66,6 +66,20 @@ DROVER_LEAD_SEATS="${DROVER_LEAD_SEATS:-lead lead-backup}"   # never restarted b
 DROVER_MAIN_BRANCH="${DROVER_MAIN_BRANCH:-main}"
 DROVER_REMOTE="${DROVER_REMOTE:-origin}"
 DROVER_UPSTREAM="$DROVER_REMOTE/$DROVER_MAIN_BRANCH"
+# Scripts match paths from git's output by name (git ls-files .beans | grep "^.beans/$bean--"). git's default
+# core.quotepath=true prints a byte above 0x80 as an octal escape inside quotes, so a bean file named
+# "...dowódca..." never matched and refill skipped it as "not on main" on every tick (forum-1avw, 2026-10-13).
+# Set it for every git these scripts and their children run, through the environment (it outranks every config
+# file). GIT_CONFIG_COUNT may already list core.quotepath, more than once and in any letter case; git takes the
+# LAST one, so a false is appended unless the last entry is already ours: the caller's entries are kept as they
+# are, and sourcing twice does not add a second entry.
+_drover_n=${GIT_CONFIG_COUNT:-0}
+case $_drover_n in ''|*[!0-9]*) _drover_n=0 ;; esac   # git itself refuses a non-number here
+_drover_k="GIT_CONFIG_KEY_$((_drover_n - 1))"; _drover_v="GIT_CONFIG_VALUE_$((_drover_n - 1))"
+if [ "$_drover_n" = 0 ] || [ "${!_drover_k:-}" != core.quotepath ] || [ "${!_drover_v:-}" != false ]; then
+  export "GIT_CONFIG_KEY_$_drover_n=core.quotepath" "GIT_CONFIG_VALUE_$_drover_n=false" GIT_CONFIG_COUNT=$((_drover_n + 1))
+fi
+unset _drover_n _drover_k _drover_v
 # Push batching for fleet-watch auto_push (DROVER_AUTOLAND=1): wait until main is this many commits ahead of
 # $DROVER_UPSTREAM before the verify+push starts; one land was one push and one CI run (panel2: 42 pushes on
 # 2026-10-12). DROVER_PUSH_MAX_WAIT_MIN > 0 pushes a smaller batch anyway once its oldest unpushed commit is

@@ -32,7 +32,9 @@ hours = int(sys.argv[sys.argv.index('--hours') + 1]) if '--hours' in sys.argv el
 
 
 def git(*a):
-    return subprocess.run(['git', '-C', REPO, *a], capture_output=True, text=True, timeout=60)
+    # core.quotepath=false: a bean file named with a non-ASCII byte came back quoted ("...\303\263...md"), failed the
+    # .md suffix test and was never audited. drover-env sets it for bash; this process does not inherit that.
+    return subprocess.run(['git', '-c', 'core.quotepath=false', '-C', REPO, *a], capture_output=True, text=True, timeout=60)
 
 
 base = git('rev-list', '-1', '--before', f'{hours} hours ago', UPSTREAM).stdout.strip()
