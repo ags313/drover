@@ -1,11 +1,11 @@
 ---
 # drover-6i9z
 title: 'fleet-watch: beans with non-ASCII file names are never queued (git quotepath)'
-status: todo
+status: completed
 type: bug
 priority: normal
 created_at: 2026-10-13T02:01:34Z
-updated_at: 2026-10-13T02:08:22Z
+updated_at: 2026-10-13T09:35:55Z
 ---
 
 fleet-watch top-up skips a bean whose file name holds a non-ASCII character ("not on main (commit the bean file first)"), although the file is committed on main. Seen 2026-10-13 for forum-1avw (`.beans/forum-1avw--auto-groups-dowódca-...md`) and panel2-wrl3 (`...béret...md`): both skipped on every tick for hours.
