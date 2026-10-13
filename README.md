@@ -156,6 +156,15 @@ mode are not part of this fork, as its first lines say.
     `DROVER_PUSH_MIN_AHEAD` commits ahead or its oldest unpushed commit is `DROVER_PUSH_MAX_WAIT_MIN` old; then one approved
     bean per tick to LOCAL main via `fleet-land-bean`, which yields while a push is in flight.
 
+"Already landed" is decided by commit subject as well as by patch. A squash land or a hand land gives the commits new
+SHAs and a different patch, so `git cherry` still counted such a branch as new work, and `fleet landable` offered beans
+that were already on main (forum-ixrd and forum-8xn7, 2026-10-13). `fleet-branch-landed --base <main> --all` looks up
+each commit subject of the branch in main's history with `git log -F --grep`, which also finds the subject lines
+`fleet-land-bean` writes into a squash commit's body. When every subject is there, `fleet landable` shows
+`MERGE landed`, and `fleet-land-bean` refuses the bean: it flags it "already on main by subject" in
+`state/needs-land` for the lead to check and clear, so the same change is never landed twice. A branch whose patches
+are all on main is still cleared as already landed, as before.
+
 `state/last` holds a one-screen summary of the latest tick; `watch/watch.log` has every decision with a
 one-word tag (ROUTED, DISPATCH, FOLLOWUP, PARTIAL, SKIP, STALE, BUDGET, APPROVED, NO-OP, SEAT, …).
 
@@ -323,6 +332,7 @@ scripts call each other by absolute path, so only your interactive shell is affe
 | `fleet-push` | The only sanctioned push: runs `fleet-verify-main`, pushes local main to origin only if green. Never force. |
 | `fleet-scoreboard` | What shipped vs what's stuck: landed/pushed today, approved-awaiting-land, in-review, integrity drift. The metric that isn't utilization. |
 | `fleet-landed-check` | Every bean that became `completed` on origin/main in the window must name a SHA on origin/main, or have a code-changing commit there that names it (or say `Landed: none — <reason>`). Prints `UNPROVEN`; the observer tick alerts on each. `--hours N`. |
+| `fleet-branch-landed [--base REF] [--all] [branch]` | A branch's bean-named commits that are not on REF (default `$DROVER_UPSTREAM`) BY SUBJECT. Exit 0 = landed, exit 1 = `AGE <minutes>` then the unlanded subjects. `fleet landable` and `fleet-land-bean` use it. |
 | `fleet-review-check` | A review artifact counts only with a verdict word or a file:line reference after CLI banner noise is dropped. Prints `EMPTY`; the observer tick alerts on each. `--minutes N`. Known-good/bad cases: `eval/eval-checkers.sh`. |
 | `fleet-slot` | flock-based limit on concurrent heavy runs: `run [--push] -- <cmd>`, `hold`, `held`, `status`. `FLEET_PUSH_SLOTS` parallel push slots, separate from the general slots; the child inherits the lock, a crashed holder is released by the kernel. Each child also gets a lower-only per-user process ceiling (`FLEET_NPROC_LIMIT`) and `JEST_MAX_WORKERS=2`. |
 | `fleet-check-inline-jest-fanout` | Fails when a prompt or script runs jest through `node -e` with more than one worker (a fork bomb). `[--self-test] [path...]`; exit 1 on a hit. |

@@ -64,6 +64,14 @@ if [ -z "$picks" ]; then
   ( cd "$REPO" && beans update "$bean" -s completed >/dev/null 2>&1 )
   echo "note: $bean had no new commits — cleared approved marker"; exit 0
 fi
+# Already on main BY SUBJECT (a squash or a hand land: new SHAs, a different patch) while the patches are not: a land
+# would put the same change on main twice. Refuse and leave it to the lead. When every patch is on main too, the
+# cherry-picks below come out empty and the bean is cleared as already landed.
+if [ -n "$(MAIN cherry "${DROVER_MAIN_BRANCH}" "$br" 2>/dev/null | grep '^+' || true)" ] \
+   && FLEET_LANDED_REPO="$REPO" "$DROVER_BIN/fleet-branch-landed" --base "${DROVER_MAIN_BRANCH}" --all "$br" >/dev/null 2>&1; then
+  flag "already on ${DROVER_MAIN_BRANCH} by subject ($br): every commit subject is there under another patch — check and clear, or land by hand"
+  exit 1
+fi
 n_picks=$(printf '%s\n' "$picks" | grep -c .)
 [ "$n_picks" -gt 40 ] && { flag "$n_picks commits ahead — $DROVER_LAND_STALE, land manually"; exit 1; }
 

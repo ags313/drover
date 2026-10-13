@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# fleet-branch-landed [--base REF] [--all] [branch] — print the subjects of a branch's commits (default HEAD) that are NOT
+# on REF BY SUBJECT: `git log REF -F --grep=<subject>`, which also finds a subject listed in a squash commit's body.
+# Never by SHA: a rebase, a cherry-pick or a squash changes the SHA, so `merge-base --is-ancestor` reports landed work
+# as missing. Only bean-named commits count (drover_bean_ids: DROVER_BEAN_RE minus seat names), and never a `wip:`
+# commit; --all counts every non-merge commit, so exit 0 means each one's subject is on REF (a branch of wip:
+# commits alone is then NOT "landed": `fleet landable` and `fleet-land-bean` use --all).
+#   exit 0  everything landed, or nothing to land
+#   exit 1  something is unlanded: first line "AGE <minutes>" (the oldest unlanded commit), then one subject per line
+#   exit 2  bad arguments or an unknown ref
+# REF defaults to $DROVER_UPSTREAM (fetched first, best effort); `fleet landable` and `fleet-land-bean` pass the local
+# main branch, which is what they land onto. Runs in the current directory's repository unless FLEET_LANDED_REPO names
+# one. (`fleet-landed-check` is the other tool: it audits COMPLETED beans; this one audits a BRANCH.)
+# Ported from upstream drover 8479c6b.
+# shellcheck source=drover-env
+. "$(dirname "$0")/drover-env"
+base="" all=0 br=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    --base) base=${2:-}; shift 2 || { echo "fleet-branch-landed: --base needs a ref" >&2; exit 2; } ;;
+    --all) all=1; shift ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    -*) echo "fleet-branch-landed: unknown option $1" >&2; exit 2 ;;
+    *) [ -z "$br" ] || { echo "usage: fleet-branch-landed [--base REF] [--all] [branch]" >&2; exit 2; }; br=$1; shift ;;
+  esac
+done
+br=${br:-HEAD}; repo="${FLEET_LANDED_REPO:-.}"
+g(){ git -C "$repo" "$@"; }
+if [ -z "$base" ]; then base=$DROVER_UPSTREAM; g fetch -q "$DROVER_REMOTE" "$DROVER_MAIN_BRANCH" 2>/dev/null || true; fi
+for r in "$base" "$br"; do
+  g rev-parse -q --verify "$r^{commit}" >/dev/null || { echo "fleet-branch-landed: unknown ref $r" >&2; exit 2; }
+done
+miss=(); oldest=0; now=$(date +%s)
+while IFS=$'\t' read -r ct subj; do
+  [ -n "$subj" ] || continue
+  # merge commits are already out (--no-merges): a one-parent commit whose subject starts "Merge " is ordinary work
+  case "$subj" in wip:*) [ "$all" = 1 ] || continue ;; esac
+  [ "$all" = 1 ] || [ -n "$(drover_bean_ids "$subj")" ] || continue   # base noise (names no bean) is not this seat's work
+  if [ -z "$(g log "$base" -F --grep="${subj:0:70}" --format=%h -1 2>/dev/null)" ]; then
+    miss+=("$subj"); a=$(( (now - ct) / 60 )); [ "$a" -gt "$oldest" ] && oldest=$a
+  fi
+done < <(g log "$base..$br" --no-merges --format=$'%ct\t%s' 2>/dev/null)
+[ ${#miss[@]} -eq 0 ] && exit 0
+echo "AGE $oldest"; printf '%s\n' "${miss[@]}"; exit 1

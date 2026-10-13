@@ -873,6 +873,11 @@ cmd_landable() {  # approved and flagged beans: the branch fleet-land-bean takes
     # NEW: commits whose change is not on main yet (patch-id, so a cherry-picked or squashed land counts as on main)
     new=$(git -C "$FLEET_ROOT" cherry ${DROVER_MAIN_BRANCH} "$br" | grep -c '^+' || true)
     merge=$(git -C "$FLEET_ROOT" merge-tree --write-tree ${DROVER_MAIN_BRANCH} "$br" >/dev/null 2>&1 && echo clean || echo CONFLICT)
+    # By SUBJECT too: a squash land changes the patch, so NEW still counted a squash-landed branch as landable
+    # (forum-ixrd, forum-8xn7 on 2026-10-13). fleet-land-bean refuses such a branch.
+    if [ "$new" != 0 ] && FLEET_LANDED_REPO="$FLEET_ROOT" "$DROVER_BIN/fleet-branch-landed" --base "${DROVER_MAIN_BRANCH}" --all "$br" >/dev/null 2>&1; then
+      merge=landed; note="(already on ${DROVER_MAIN_BRANCH} by subject)"
+    fi
     if [ "$new" = 0 ]; then note="(already on ${DROVER_MAIN_BRANCH})"
     elif [ -z "$(git -C "$FLEET_ROOT" diff --name-only "${DROVER_MAIN_BRANCH}...$br" -- . ':(exclude).beans')" ]; then note="(bean file only)"; fi
     subj=$(git -C "$FLEET_ROOT" log --no-merges --format=%s "${DROVER_MAIN_BRANCH}..$br" | grep -v '^chore(beans)' | tail -1 || true)
@@ -880,6 +885,7 @@ cmd_landable() {  # approved and flagged beans: the branch fleet-land-bean takes
     [ $st = flagged ] && printf '%-12s ↳ %s\n' "" "$(head -1 "$f")"
   done
   echo "MERGE is each branch against ${DROVER_MAIN_BRANCH} alone: two clean branches can still conflict once one lands."
+  echo "MERGE landed: every commit's subject is already on ${DROVER_MAIN_BRANCH} (fleet-branch-landed); fleet-land-bean refuses it."
 }
 
 sync_worktree() {  # <name> — bring an idle agent's worktree up to main without touching the user's tree
