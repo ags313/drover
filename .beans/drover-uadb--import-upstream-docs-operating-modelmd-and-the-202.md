@@ -1,11 +1,11 @@
 ---
 # drover-uadb
 title: 'Import upstream docs: OPERATING-MODEL.md and the 2026-10-12/13 LESSONS sections'
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-10-13T21:08:07Z
-updated_at: 2026-10-13T21:16:45Z
+updated_at: 2026-10-13T21:24:38Z
 ---
 
 Import the documentation from upstream (remote `origin` = andrebrov/drover, commits e6d9d54, 2c92453, 8479c6b): `docs/OPERATING-MODEL.md` (new) and the four new `docs/LESSONS.md` sections ("Batch lander ...", "Assignment, queue and daemon rules (2026-10-12 retro)", "Cadence rules (2026-10-13)", "Landing is guaranteed by three machines ...").
