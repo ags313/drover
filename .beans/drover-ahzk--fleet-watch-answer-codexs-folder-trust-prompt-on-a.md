@@ -1,11 +1,11 @@
 ---
 # drover-ahzk
 title: 'fleet-watch: answer codex''s folder-trust prompt on a seat''s own worktree'
-status: todo
+status: completed
 type: bug
 priority: normal
 created_at: 2026-10-14T22:28:44Z
-updated_at: 2026-10-14T22:33:03Z
+updated_at: 2026-10-14T23:07:21Z
 ---
 
 Facts (bob project, first `fleet up`, 2026-10-14 23:25): both codex seats (`bob-codex-coder`, `bob-codex-reviewer`) stopped on codex's folder-trust prompt and stayed `blocked` for two ticks. The screen:
