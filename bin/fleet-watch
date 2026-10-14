@@ -24,6 +24,7 @@
 #   fleet-watch top-up          queue ready beans from the board (the tick's top-up step), then exit
 #   fleet-watch land-lane       one auto_push then one auto_land pass (DROVER_AUTOLAND lane), wait for both, exit
 #   fleet-watch dispatch        one inbox drain, queue top-up and refill pass (the tick's dispatch steps), then exit
+#   fleet-watch dialogs         one pass answering the known blocking dialogs on every seat (the tick's step), then exit
 #   fleet-watch unpark <bean>   lift a BLOCKED bean's park and re-queue it
 #   fleet-watch enqueue <bean>  add a bean to the global queue
 #   fleet-watch queue           show the queue
@@ -86,6 +87,13 @@ Run the tick's dispatch steps once — drain the inbox, top up the queue, refill
 Mutating.
 H
       ;;
+    dialogs) cat <<'H'
+fleet-watch dialogs
+Run the tick's dialog pass once: read the last 8 lines of every seat and answer the known blocking dialogs
+(auto-mode prompt, save-config, model switch, Claude and codex folder trust, harness update, paused goal), then
+exit. Mutating (sends keys).
+H
+      ;;
     unpark) cat <<'H'
 fleet-watch unpark <bean>
 A BLOCKED announcement parks the bean (state/parked/<bean>): top-up and refill skip it, so it is not handed
@@ -107,8 +115,8 @@ Run one watcher tick (dialogs, budget, inbox, refill), then exit. Mutating.
 --dry-run  print preview; do not tick
 H
       ;;
-    run) sed -n '2,28p' "$0" ;;
-    *) sed -n '2,28p' "$0" ;;
+    run) sed -n '2,29p' "$0" ;;
+    *) sed -n '2,29p' "$0" ;;
     run) sed -n '2,27p' "$0" ;;
     *) sed -n '2,27p' "$0" ;;
   esac
@@ -172,6 +180,9 @@ clear_dialogs(){
       # option text and only when the cursor sits on the known-safe neighbour, so a changed layout is
       # ignored rather than mis-clicked.
       *"❯ No, exit"*"Yes, I trust this folder"*)          "$DROVER_BIN"/fleet keys "$a" Down Enter >/dev/null 2>&1; log "dialog: trusted own worktree on $a" ;;
+      # codex's folder-trust prompt: its question line ("Trust this folder?") is above the 8-line read, so match
+      # the two option lines, cursor on 1. Never its "enter continue" hint: that is generic codex chrome.
+      *"› 1. Trust and continue"*"2. Quit"*)              "$DROVER_BIN"/fleet keys "$a" Enter >/dev/null 2>&1; log "dialog: trusted own worktree on $a (codex)" ;;
       *"Update now"*"2. Skip"*"Skip until next version"*) "$DROVER_BIN"/fleet keys "$a" Down Enter >/dev/null 2>&1; log "dialog: skipped harness update on $a" ;;
       *"Resume paused goal?"*"2. Leave paused"*)         "$DROVER_BIN"/fleet keys "$a" Down Enter >/dev/null 2>&1; log "dialog: left stale goal paused on $a" ;;
     esac
@@ -1019,6 +1030,7 @@ if [ "${1:-run}" = route-land ]; then route_land_conflicts; exit 0; fi
 if [ "${1:-run}" = auto-push ]; then auto_push; wait; exit 0; fi
 if [ "${1:-run}" = top-up ]; then top_up_queue; exit 0; fi
 if [ "${1:-run}" = land-lane ]; then auto_push; wait; auto_land; wait; exit 0; fi
+if [ "${1:-run}" = dialogs ]; then clear_dialogs; exit 0; fi
 if [ "${1:-run}" = dispatch ]; then drain_inbox; top_up_queue; refill; exit 0; fi
 log "fleet-watch started (tick ${TICK}s)"
 # Landing lane on its own 60s cadence, decoupled from the full tick: when the tick itself grows long

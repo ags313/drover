@@ -5,7 +5,7 @@ status: todo
 type: bug
 priority: normal
 created_at: 2026-10-14T22:28:44Z
-updated_at: 2026-10-14T22:28:44Z
+updated_at: 2026-10-14T22:33:03Z
 ---
 
 Facts (bob project, first `fleet up`, 2026-10-14 23:25): both codex seats (`bob-codex-coder`, `bob-codex-reviewer`) stopped on codex's folder-trust prompt and stayed `blocked` for two ticks. The screen:
@@ -35,6 +35,6 @@ Facts (bob project, first `fleet up`, 2026-10-14 23:25): both codex seats (`bob-
 
 ## Acceptance
 
-- [ ] a codex seat that starts on the folder-trust prompt is trusted by the next tick, with the log line above
-- [ ] the Claude case and the other cases are unchanged
-- [ ] shellcheck clean
+- [x] a codex seat that starts on the folder-trust prompt is trusted by the next tick, with the log line above
+- [x] the Claude case and the other cases are unchanged
+- [x] shellcheck clean

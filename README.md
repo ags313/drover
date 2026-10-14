@@ -109,7 +109,8 @@ mode are not part of this fork, as its first lines say.
 `fleet-watch run` ticks every 60 seconds (`FLEET_TICK`). In order:
 
 1. **Clear known blocking dialogs** — only exact matches (an auto-mode prompt, a save confirmation, a
-   rate-limit model switch). A generic "Enter to confirm" match once hit a folder-trust dialog whose cursor sat
+   rate-limit model switch, Claude's and codex's folder-trust prompt on a seat's own worktree, with the cursor on
+   the known option; `fleet-watch dialogs` runs this pass alone). A generic "Enter to confirm" match once hit a folder-trust dialog whose cursor sat
    on "No, exit" and killed three seats.
 2. **Budget** — `fleet-budget` reads each non-working pane for out-of-credits / usage-limit / session-limit
    banners (ignoring stale scrollback); the spend guard sums today's per-message opencode cost from its database and compares it with your daily cap; any
@@ -184,7 +185,7 @@ one-word tag (ROUTED, DISPATCH, FOLLOWUP, PARTIAL, SKIP, STALE, BUDGET, APPROVED
 | Held beans | APPROVED beans and beans with two no-op rounds never re-enter the queue. | `state/approved`, `state/noop-held` |
 | finish-first freeze | `touch state/finish-first`: no new beans enter any seat; fix rounds and reviews still flow, so everything in flight converges and lands. | `top_up_queue`, `refill` |
 | Harness off-switch | One harness name per line in `state/harness-off`. | `check_budget` |
-| Dialog clearing | Only exact, known dialogs are answered. Permission and trust dialogs are never answered; with the seat detector enabled they are flagged for the human once. | `clear_dialogs`, `seat_scan` |
+| Dialog clearing | Only exact, known dialogs are answered (folder trust only in the exact Claude and codex layouts). Permission dialogs are never answered; with the seat detector enabled they are flagged for the human once. | `clear_dialogs`, `seat_scan` |
 | Worktree and scratch sweep | Deletes scratchpad dirs over 50 MB untouched for 2 h, and review worktrees that are stale (12 h), clean, carry no unique commit and have no process inside — via `git worktree remove` without `--force`. | `fleet-sweep` |
 | WIP snapshots | Every 20 min, copies every worktree's dirty *tracked* files aside (kept 48 h). A `git reset --hard` once destroyed ~87 unstaged edits that git cannot recover by design. | `fleet-snapshot` |
 | Yolo guard | herdr resumes agents after a reboot without their approval-bypass flags; idle seats are relaunched with them, resuming their own session. A `working` seat is never interrupted. | `fleet-yolo` |
