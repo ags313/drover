@@ -312,7 +312,11 @@ it does not move a seat that is already up. `fleet models` shows what each seat 
 `DROVER_MANUAL_SEATS` keeps the watcher's hands off the seat: refill, the integration lane, land routing, reviewer
 picks, `fleet-hunt` and observer self-serve all skip it. In the observer queue it takes only lines that name it.
 `fleet status` shows `manual:` in front of its TITLE. It gets work only from the lead: `fleet assign <bean>
-qwen-coder`. Fix rounds for the beans it holds (reviewer CHANGES, unchecked items, its own land conflicts) still
+qwen-coder`, or the tag `seat:qwen-coder` on a bean (`beans update <bean> --tag seat:qwen-coder`). The watcher
+queues a ready tagged bean even while the queue holds other beans, and refill hands it to that seat on the first
+tick the seat is idle, never to another seat; `fleet status` shows `manual: waiting <bean>` meanwhile, and
+`fleet-watch queue` shows `<bean> -> qwen-coder`. A tag naming a seat off the roster is logged and the bean stays
+out of the queue. The tag works for any seat, automatic ones included. Fix rounds for the beans it holds (reviewer CHANGES, unchecked items, its own land conflicts) still
 reach it, and its branches are reviewed on a different harness as usual (`opencode` here).
 
 To land: follow [`docs/RUNBOOK.md`](docs/RUNBOOK.md). To stop new work while everything in flight finishes:

@@ -5,7 +5,7 @@ status: todo
 type: feature
 priority: normal
 created_at: 2026-10-14T22:32:03Z
-updated_at: 2026-10-14T22:32:03Z
+updated_at: 2026-10-14T22:41:14Z
 ---
 
 Facts (bob, panel2, 2026-10-14): a `DROVER_MANUAL_SEATS` seat (`panel2-qwen-coder`, `bob-qwen-coder`: opencode on a local ollama model) gets work only from the lead's `fleet assign`. Every ready bean is queued and handed to an automatic coder within one tick, so the lead has to hold a bean out of the queue (status `draft`), watch for its blockers to land, flip it and assign by hand. On bob the lead holds five size-S steps this way (tag `qwen`).
@@ -24,8 +24,8 @@ Out of scope: choosing beans for the seat by size or heuristics; that stays a le
 
 ## Acceptance
 
-- [ ] a ready bean tagged `seat:X` is dispatched to seat X on the first tick X is idle, and never to another seat
-- [ ] a ready bean without the tag is never dispatched to a manual seat
-- [ ] a tag naming a seat not in the roster is logged once per top-up and the bean is left out of the queue
-- [ ] ledger and task file match the automatic path; `fleet-track` shows the bean on the seat
-- [ ] shellcheck clean; the eval or test that covers `refill` is extended
+- [x] a ready bean tagged `seat:X` is dispatched to seat X on the first tick X is idle, and never to another seat
+- [x] a ready bean without the tag is never dispatched to a manual seat
+- [x] a tag naming a seat not in the roster is logged once per top-up and the bean is left out of the queue
+- [x] ledger and task file match the automatic path; `fleet-track` shows the bean on the seat
+- [x] shellcheck clean; the eval or test that covers `refill` is extended

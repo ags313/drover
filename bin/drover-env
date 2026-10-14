@@ -46,7 +46,7 @@ DROVER_SRC="${DROVER_SRC:-$(cd "$(dirname "$_drover_self")/.." && pwd)}"
 unset _drover_self _drover_t
 
 DROVER_HOME="${DROVER_HOME:-$HOME/.local/share/drover}"
-FLEET_QUEUE="${FLEET_QUEUE:-$DROVER_HOME/queue}"        # global FIFO: one empty file per bean, <epoch>-<bean>
+FLEET_QUEUE="${FLEET_QUEUE:-$DROVER_HOME/queue}"        # global FIFO: one file per bean, <epoch>-<bean>, holding its routed seat (tag seat:<name>) or empty
 FLEET_INBOX="${FLEET_INBOX:-$DROVER_HOME/inbox}"        # fleet-done writes one .msg per announcement
 FLEET_TASKS="${FLEET_TASKS:-$DROVER_HOME/tasks}"        # one file per busy seat — the ONLY busy marker
 FLEET_BRIEFS="${FLEET_BRIEFS:-$DROVER_HOME/briefs}"     # prompts are written here; agents get a one-line pointer
@@ -62,7 +62,8 @@ DROVER_LEAD_SEATS="${DROVER_LEAD_SEATS:-lead lead-backup}"   # never restarted b
 # Lead-only seats (e.g. a small local model): no automatic dispatch ever picks them — not the watcher's refill,
 # integration lane, land routing or reviewer pick, not a hunt, not observer self-serve or a broadcast queue line.
 # They get work only from the lead: `fleet assign <bean> <seat>`, `fleet review`, a lead-queue line naming them,
-# and the fix rounds of beans they already hold. `fleet status` prefixes their TITLE with "manual:".
+# a ready bean tagged seat:<seat> (fleet-watch refill), and the fix rounds of beans they already hold.
+# `fleet status` prefixes their TITLE with "manual:" ("manual: waiting <bean>" while a tagged bean is queued).
 DROVER_MANUAL_SEATS="${DROVER_MANUAL_SEATS:-}"
 drover_manual_seat(){ case " ${DROVER_MANUAL_SEATS:-} " in *" $1 "*) return 0 ;; esac; return 1; }
 

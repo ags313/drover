@@ -427,6 +427,11 @@ cmd_status() {
     # A lead-only seat (DROVER_MANUAL_SEATS) idles by design: say so in TITLE, the free-text last column, so every
     # parser of NAME/KIND/STATE reads the row unchanged.
     drover_manual_seat "$name" && tp="manual: "
+    # ...and names the oldest queued bean routed to it (tag seat:<name>; the queue file holds the seat name)
+    if [ -n "$tp" ]; then
+      local qf; qf=$(grep -lx -- "$name" "$FLEET_QUEUE"/* 2>/dev/null | head -1 || true)
+      [ -z "$qf" ] || { qf=${qf##*/}; tp="manual: waiting ${qf#*-} "; }
+    fi
     row=$(jq -c --arg n "$name" 'select(.name == $n)' <<<"$live")
     if [ -z "$row" ]; then
       printf '%-18s %-9s %-8s %-7s %-24s %s\n' "$name" "$kind" MISSING - - "$tp(run: fleet up)"; rc=1; continue

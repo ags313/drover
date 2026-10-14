@@ -58,7 +58,7 @@ H
       ;;
     queue) cat <<'H'
 fleet-watch queue
-List beans in the global FIFO queue. Read-only.
+List beans in the global FIFO queue, a seat-routed one (tag seat:<name>) as "<bean> -> <seat>". Read-only.
 H
       ;;
     route-land) cat <<'H'
@@ -157,7 +157,7 @@ kind_of(){ "$DROVER_BIN"/fleet status 2>/dev/null | awk -v n="$1" '$1==n{print $
 case "$verb" in
   enqueue)
     : > "$Q/$(date +%s%N)-$2"; echo "queued $2"; exit 0 ;;
-  queue)   ls "$Q" 2>/dev/null | sed 's/^[0-9]*-//' ; exit 0 ;;
+  queue)   for f in "$Q"/*; do [ -f "$f" ] || continue; r=$(cat "$f" 2>/dev/null); f=${f##*/}; echo "${f#*-}${r:+ -> $r}"; done; exit 0 ;;
   unpark)
     [ -n "${2:-}" ] || { echo "usage: fleet-watch unpark <bean>" >&2; exit 2; }
     [ -f "$STATE/parked/$2" ] || { echo "not parked: $2"; exit 1; }
@@ -564,7 +564,10 @@ top_up_queue(){
   # then merge into main and close". While state/finish-first exists no NEW bean enters the queue or a seat;
   # fix rounds (followups) and reviews on existing work still flow.
   [ -f "$STATE/finish-first" ] && return 0
-  [ "$(ls "$Q" 2>/dev/null | wc -l | tr -d ' ')" = 0 ] || return 0
+  # A non-empty queue gets only seat-routed beans (tag seat:<name>): one waits for its own seat, not for the queue
+  # to drain. Without the tag a bean enters only an empty queue, as before. Every pass also re-routes the entries
+  # already queued to the bean's current tag: a retag must not wait for the old seat to come free.
+  local only_routed=0; [ "$(ls "$Q" 2>/dev/null | wc -l | tr -d ' ')" = 0 ] || only_routed=1
   # Fleet base invariant: $DROVER_REPO must be on main. `beans list --ready` reads the WORKING TREE,
   # but the dispatch guard reads `main:`. A drifted base enqueues beans already completed on main;
   # refill skips them all and every coder idles behind a misleading "queue empty". Fail closed.
@@ -581,7 +584,7 @@ top_up_queue(){
     return 0
   fi
   [ -f "$STATE/.wip-capped" ] && { rm -f "$STATE/.wip-capped"; log "WIP CAP lifted: backlog $_wip < $_cap — resuming dispatch"; }
-  local added; added=$(cd "$REPO" && beans list --json --ready 2>/dev/null | KW="${DROVER_QUEUE_KEYWORDS:-}" python3 -c '
+  local added; added=$(cd "$REPO" && beans list --json --ready 2>/dev/null | KW="${DROVER_QUEUE_KEYWORDS:-}" ONLY_ROUTED=$only_routed python3 -c '
 import json,os,sys
 try: bs=json.load(sys.stdin) or []   # an empty board prints null, not []
 except Exception: sys.exit(0)
@@ -592,16 +595,35 @@ def key(b):
     return (0 if any(w in tx for w in KW) else 1, order.get(b.get("priority"),2))
 bs=[b for b in bs if b.get("type") not in ("epic","milestone")]   # containers have no work of their own
 bs.sort(key=key)
-print("\n".join(b["id"] for b in bs[:20]))
+def seat(b): return next((t[5:] for t in b.get("tags") or [] if t.startswith("seat:") and t[5:]), "")
+plain=[] if os.environ["ONLY_ROUTED"]=="1" else [b for b in bs if not seat(b)][:20]
+new=plain+[b for b in bs if seat(b)]   # routed beans: no top-20 cut
+# 1 = may enter the queue (0: listed only to re-route an entry already queued), id, seat. The seat goes last: a tab
+# is IFS whitespace, so an empty field in the middle would collapse and shift the next one into it.
+ids={b["id"] for b in new}
+print("\n".join(("1" if b["id"] in ids else "0")+"\t"+b["id"]+"\t"+seat(b) for b in new+[b for b in bs if b["id"] not in ids]))
 ')
-  local i n; i=$(date +%s); n=0   # no early return on an empty ready list: an empty loop is harmless
-  for id in $added; do
+  local i n id seat admit f r queued roster=""; i=$(date +%s); n=0   # no early return on an empty ready list: an empty loop is harmless
+  while IFS=$'\t' read -r admit id seat; do
+    [ -n "$id" ] || continue
+    queued=0; for f in "$Q"/*-"$id"; do [ -f "$f" ] && queued=1; done
+    if [ -n "$seat" ]; then
+      [ -n "$roster" ] || roster=" $("$DROVER_BIN"/fleet status 2>/dev/null | awk 'NR>1 && $1!="-"{printf "%s ",$1}')"
+      case "$roster" in *" $seat "*) ;; *) [ "$queued" = 0 ] || rm -f "$Q"/*-"$id"
+        log "SKIP $id — tagged seat:$seat, which is not on the roster; left out of the queue"; continue ;; esac
+    fi
+    if [ "$queued" = 1 ]; then                                                                              # already queued: re-route
+      for f in "$Q"/*-"$id"; do r=$(cat "$f" 2>/dev/null); [ "$r" = "$seat" ] && continue
+        printf '%s' "$seat" > "$f"; log "REROUTE $id — queued for '${r:-any seat}', now '${seat:-any seat}' (its tag)"; done
+      continue
+    fi
+    [ "$admit" = 1 ] || continue
     grep -lq -- "	$id	" "$TASKS"/* 2>/dev/null && continue
     grep -lq -- "^$id	" "$STATE"/followups/* 2>/dev/null && continue
     [ -f "$STATE/reviews/$id" ] || [ -f "$STATE/approved/$id" ] || [ -f "$STATE/noop-held/$id" ] && continue   # awaiting a reviewer or a landing
     parked "$id" && continue                                                                                # BLOCKED, waiting on the lead
-    touch "$Q/$i-$id"; i=$((i+1)); n=$((n+1))
-  done
+    printf '%s' "$seat" > "$Q/$i-$id"; i=$((i+1)); n=$((n+1))                                              # the file holds its seat
+  done <<<"$added"
   [ "$n" = 0 ] || log "QUEUE topped up with $n ready bean(s)"
 }
 
@@ -644,8 +666,18 @@ auto_announce(){
   done
 }
 
+# The first queue entry seat $1 may take. An entry's file holds the seat its bean is routed to (tag seat:<name>):
+# only that seat takes it. An empty file is for any automatic seat; a manual seat ($2=1) never takes one.
+queue_pick(){ local f r
+  for f in "$Q"/*; do                                     # glob order = ls order: oldest <epoch>- first
+    [ -f "$f" ] || continue; r=$(cat "$f" 2>/dev/null)
+    if [ -n "$r" ]; then [ "$r" = "$1" ] || continue; elif [ "$2" = 1 ]; then continue; fi
+    echo "${f##*/}"; return 0
+  done; return 1
+}
+
 refill(){
-  local qempty=""
+  local qempty="" manual next route tagged route_only
   for a in $("$DROVER_BIN"/fleet status 2>/dev/null | awk 'NR>1 && $3!="MISSING" && $3!="blocked" && $1 ~ /coder(-[0-9]+)?$/ {print $1}'); do
     [ -f "$TASKS/$a" ] && continue                      # has an open task (by artifact, not status)
     harness_ok "$a" || continue
@@ -678,25 +710,27 @@ refill(){
       "$DROVER_BIN"/fleet-track dispatch "$a" "$fb" >/dev/null 2>&1
       log "FOLLOWUP $fb -> $a ($out)"; continue
     fi
-    # Lead-only seat (DROVER_MANUAL_SEATS): the fix rounds above are for beans the lead handed it; no queued bean and
-    # no integration rebase ever reaches it from here.
-    if drover_manual_seat "$a"; then continue; fi
+    # Lead-only seat (DROVER_MANUAL_SEATS): beyond the fix rounds above, it takes only a queued bean tagged
+    # seat:<its name>; no untagged bean and no integration rebase ever reaches it from here.
+    manual=0; drover_manual_seat "$a" && manual=1
     if [ -f "$STATE/finish-first" ]; then continue; fi   # finish-and-land first: no new beans
     # WIP CAP: no NEW bean dispatch while the integration backlog is full (followups above still flow).
     # Backpressure must not idle coders: the backlog it waits on often needs a CODER (a conflicted
     # approved bean). Measured: beans sat on real conflicts at the cap while coders idled with nothing
     # to do. A free seat under the cap takes the oldest conflicted bean as a rebase followup instead.
-    if [ "$(wip_count)" -ge "$(wip_cap)" ]; then integration_pick "$a"; continue; fi
+    if [ "$(wip_count)" -ge "$(wip_cap)" ]; then [ "$manual" = 1 ] || integration_pick "$a"; continue; fi
     # Empty queue = no NEW bean for this seat; later seats may still hold followups. `return` here
     # starved every seat after the first free one (2026-09-22: one coder sat on 4 followups while
     # "queue empty — nothing for <the first free coder>" logged every tick). Log once per tick, keep walking.
-    next=$(ls "$Q" 2>/dev/null | head -1); [ -n "$next" ] || { if [ -z "$qempty" ]; then log "queue empty — nothing for $a"
+    next=$(queue_pick "$a" "$manual"); [ -n "$next" ] || [ "$manual" = 0 ] || continue   # nothing routed to this manual seat
+    route_only=""; [ -n "$next" ] || [ -z "$(ls "$Q" 2>/dev/null)" ] || route_only=1
+    [ -n "$next" ] || { if [ -z "$qempty" ]; then log "queue empty${route_only:+ but for seat-routed beans} — nothing for $a"
         # A seat wanted work and got none: feed one orphan OpenSpec change (or stuck epic) onto the board
         # (capped, deduped; picked up next tick). Triggered HERE, not in top_up: a train-capped bean
         # re-queued every tick made top_up report "1 ready" while seats idled (2026-09-22, 121 orphan changes).
         f=$(capped 300 "$DROVER_BIN"/fleet-spec-feed 2>&1 | grep '^filed'); [ -n "$f" ] && log "SPEC-FEED $f"; fi
       qempty=1; continue; }
-    bean=${next#*-}; rm -f "$Q/$next"
+    bean=${next#*-}; route=$(cat "$Q/$next" 2>/dev/null); rm -f "$Q/$next"
     # Drop EVERY other queue entry for this bean, not just the one popped. The queue is a
     # directory, so nothing stops the same bean being enqueued twice — a top-up and a requeue
     # can both add it, and the lead can add it by hand. Two entries means the bean is dispatched
@@ -723,8 +757,20 @@ refill(){
     # blocked-by another in between. Measured 2026-09-08 — a bean was gated behind
     # another and dispatched anyway from a queue built before the gate.
     # Re-ask at pop time; the top-up-time answer is not binding.
-    if ! (cd "$REPO" && beans list --json --ready 2>/dev/null | grep -q "\"$bean\""); then
+    if ! tagged=$(cd "$REPO" && beans list --json --ready 2>/dev/null | B="$bean" python3 -c '
+import json,os,sys
+try: bs=json.load(sys.stdin) or []
+except Exception: sys.exit(1)
+b=next((b for b in bs if b.get("id")==os.environ["B"]), None)
+if b is None: sys.exit(1)
+print(next((t[5:] for t in b.get("tags") or [] if t.startswith("seat:") and t[5:]), ""))'); then
       log "SKIP $bean — no longer ready (blocked or status changed since it was queued); dropped"
+      continue
+    fi
+    # The tag is re-read here too: a bean tagged (or retagged) after it was queued, or queued by hand, is routed
+    # by its tag, never by the stale entry. Dropped; top-up re-queues it for the tagged seat.
+    if [ "$tagged" != "$route" ]; then
+      log "SKIP $bean — routed to '${route:-any seat}' in the queue but tagged '${tagged:+seat:$tagged}'; dropped for top-up to re-route"
       continue
     fi
     # A seat that is out of usage credits accepts the prompt, goes 'working', and does
@@ -733,7 +779,7 @@ refill(){
     if "$DROVER_BIN"/fleet read "$a" 12 2>/dev/null | grep -qiE "out of usage credits|/usage-credits|Buy more credits|keep using Grok Build|hit your usage limit|purchase more credits"; then
       log "SKIP $a — OUT OF USAGE CREDITS (seat is dead, does not recover); $bean requeued"
       mkdir -p "$STATE/credit-dead"; : > "$STATE/credit-dead/$a"   # stop re-picking it every tick
-      printf '' > "$Q/$(date +%s)-$bean"; continue
+      printf '%s' "$route" > "$Q/$(date +%s)-$bean"; continue
     fi
     # EPIC TRAIN CAP: keep a roadmap epic to <=N beans in flight (dropped from the queue, not requeued
     # — top_up re-adds it when the epic has room; requeuing would churn every tick).
@@ -743,7 +789,7 @@ refill(){
     fi
     out=$(cd "$REPO" && "$DROVER_BIN"/fleet assign "$bean" "$a" 2>&1 | tail -1); rc=$?
     if [ $rc -ne 0 ] || printf '%s' "$out" | grep -qiE "error|not on ${DROVER_MAIN_BRANCH}|unknown agent|syntax"; then
-      log "DISPATCH $bean -> $a FAILED (${out:0:80}) — bean requeued, agent left free"; printf '' > "$Q/$(date +%s)-$bean"; continue
+      log "DISPATCH $bean -> $a FAILED (${out:0:80}) — bean requeued, agent left free"; printf '%s' "$route" > "$Q/$(date +%s)-$bean"; continue
     fi
     "$DROVER_BIN"/fleet-track dispatch "$a" "$bean" >/dev/null 2>&1
     log "DISPATCH $bean -> $a ($out)"
