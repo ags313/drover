@@ -1,11 +1,11 @@
 ---
 # drover-104i
 title: 'Port fleet-branch-landed from upstream: by-subject landed check in fleet landable'
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-10-13T21:08:07Z
-updated_at: 2026-10-13T21:23:43Z
+updated_at: 2026-10-14T01:33:32Z
 ---
 
 Port `bin/fleet-branch-landed` from upstream (remote `origin` = andrebrov/drover, commit 8479c6b "Port landing enforcement"), and use it in `fleet landable` (`bin/fleet` `cmd_landable`). Nothing else from that commit.
