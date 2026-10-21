@@ -1,11 +1,11 @@
 ---
 # drover-ecuo
 title: 'fleet-watch: dispatch a bean tagged seat:<name> to that manual seat'
-status: todo
+status: completed
 type: feature
 priority: normal
 created_at: 2026-10-14T22:32:03Z
-updated_at: 2026-10-14T22:41:14Z
+updated_at: 2026-10-14T23:07:31Z
 ---
 
 Facts (bob, panel2, 2026-10-14): a `DROVER_MANUAL_SEATS` seat (`panel2-qwen-coder`, `bob-qwen-coder`: opencode on a local ollama model) gets work only from the lead's `fleet assign`. Every ready bean is queued and handed to an automatic coder within one tick, so the lead has to hold a bean out of the queue (status `draft`), watch for its blockers to land, flip it and assign by hand. On bob the lead holds five size-S steps this way (tag `qwen`).
