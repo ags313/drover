@@ -714,7 +714,7 @@ head=$(git rev-parse HEAD); out=$("$BIN"/fleet-land-bean bean-sl01 2>&1); rc=$?
   || bad "land-bean by subject (rc=$rc): $out"
 rm -f "$FLEET_STATE/needs-land/bean-sl01" "$FLEET_STATE/approved/bean-nl01"
 
-# --- clear_dialogs: codex's folder-trust prompt is answered; a changed layout or bare chrome is left alone ----
+# --- clear_dialogs: folder-trust prompts are answered; a changed layout or bare chrome is left alone ----
 # A copy of fleet-watch beside a stub `fleet`: status lists the seats, read prints $SCREENS/<seat>, keys logs.
 mkdir -p "$T/kbin" "$T/screens"; cp "$BIN"/fleet-watch "$BIN"/drover-env "$T/kbin/"
 cat > "$T/kbin/fleet" <<'STUB'
@@ -730,6 +730,16 @@ chmod +x "$T/kbin/fleet"
 printf '  Trust this folder? Codex can read, edit, and run files here, ...\n\n› 1. Trust and continue\n  2. Quit\n\n  enter continue · esc quit\n' > "$T/screens/cx-on1"
 printf '  1. Trust and continue\n› 2. Quit\n\n  enter continue · esc quit\n' > "$T/screens/cx-on2"
 printf ' ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to exit\n' > "$T/screens/cl-trust"
+cat > "$T/screens/agy-on1" <<'SCREEN'
+Accessing workspace:
+/home/ags/.herdr/worktrees/bob/fleet-bob-agy-coder
+Do you trust the contents of this project?
+Antigravity CLI requires permission to read, edit, and execute files here.
+> Yes, I trust this folder
+  No, exit
+  ↑/↓ Navigate · enter Confirm
+SCREEN
+sed 's/^> Yes/  Yes/; s/^  No/> No/' "$T/screens/agy-on1" > "$T/screens/agy-on2"
 printf '  Working (12s)\n\n  enter continue · esc quit\n' > "$T/screens/cx-chrome"
 SCREENS="$T/screens" KEYS="$T/keys" FLEET_STATE="$T/kw/state" "$T/kbin/fleet-watch" dialogs >/dev/null 2>&1
 grep -qx 'cx-on1 Enter' "$T/keys" && grep -q 'dialog: trusted own worktree on cx-on1 (codex)$' "$T/kw/watch.log" \
@@ -737,7 +747,10 @@ grep -qx 'cx-on1 Enter' "$T/keys" && grep -q 'dialog: trusted own worktree on cx
   || bad "codex trust: keys=$(tr '\n' '|' < "$T/keys" 2>/dev/null) log=$(tr '\n' '|' < "$T/kw/watch.log" 2>/dev/null)"
 grep -qx 'cl-trust Down Enter' "$T/keys" && grep -q 'dialog: trusted own worktree on cl-trust$' "$T/kw/watch.log" \
   && ok 'clear_dialogs: the Claude folder-trust case is unchanged (Down Enter)' || bad "claude trust: keys=$(tr '\n' '|' < "$T/keys" 2>/dev/null)"
-[ "$(wc -l < "$T/keys")" = 2 ] && ok 'clear_dialogs: cursor on "2. Quit" and bare "enter continue" chrome get no keys' \
+grep -qx 'agy-on1 Enter' "$T/keys" && grep -q 'dialog: trusted own worktree on agy-on1 (agy)$' "$T/kw/watch.log" \
+  && ok 'clear_dialogs: Antigravity folder-trust with the cursor on Yes gets Enter, logged (agy)' \
+  || bad "agy trust: keys=$(tr '\n' '|' < "$T/keys" 2>/dev/null) log=$(tr '\n' '|' < "$T/kw/watch.log" 2>/dev/null)"
+[ "$(wc -l < "$T/keys")" = 3 ] && ok 'clear_dialogs: cursor on No or "2. Quit" and bare "enter continue" chrome get no keys' \
   || bad "dialog keys sent to the wrong seats: $(tr '\n' '|' < "$T/keys")"
 
 # Silent seat recovery: real tracked changes, persistent state, bounded prompt stub.

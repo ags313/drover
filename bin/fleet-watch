@@ -194,6 +194,8 @@ clear_dialogs(){
       # option text and only when the cursor sits on the known-safe neighbour, so a changed layout is
       # ignored rather than mis-clicked.
       *"❯ No, exit"*"Yes, I trust this folder"*)          "$DROVER_BIN"/fleet keys "$a" Down Enter >/dev/null 2>&1; log "dialog: trusted own worktree on $a" ;;
+      # Antigravity starts on Yes; confirm only that cursor position and the two exact options.
+      *"> Yes, I trust this folder"*"No, exit"*)          "$DROVER_BIN"/fleet keys "$a" Enter >/dev/null 2>&1; log "dialog: trusted own worktree on $a (agy)" ;;
       # codex's folder-trust prompt: its question line ("Trust this folder?") is above the 8-line read, so match
       # the two option lines, cursor on 1. Never its "enter continue" hint: that is generic codex chrome.
       *"› 1. Trust and continue"*"2. Quit"*)              "$DROVER_BIN"/fleet keys "$a" Enter >/dev/null 2>&1; log "dialog: trusted own worktree on $a (codex)" ;;
