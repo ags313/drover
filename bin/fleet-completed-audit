@@ -6,8 +6,9 @@
 # from main but leaves the bean `completed`. Nothing else reconciles bean status when code leaves
 # main; this does. Read-only — it never changes bean status (reconcile is a separate, human action).
 #
-# Signal: a bean is `completed` on origin/main AND some fleet branch for it has git-cherry '+' commits
-# (not in origin/main by patch-id) that touch real code. "Code" = any tracked file outside .beans/,
+# Signal: a bean is `completed` on origin/main AND every fleet branch for it has unlanded code.
+# Patch-id is a fast first check; fleet-branch-landed --all recognises rewritten/squashed subjects.
+# "Code" = any tracked file outside .beans/,
 # or the paths matching DROVER_CODE_PATHS (an ERE) when you set it. Writes the list + a cached count.
 #
 #   fleet-completed-audit           print the falsely-completed list + count, refresh the cache
@@ -20,22 +21,41 @@ CACHE="$STATE/completed-audit"
 CODE_RE="${DROVER_CODE_PATHS:-}"
 if [ "${1:-}" = --count ]; then sed -n '1p' "$CACHE" 2>/dev/null; exit 0; fi
 cd "$REPO" || exit 1
+# Print a marker when any supplied commit changes code.
+code_hit(){
+  local c files
+  while read -r c; do
+    files=$(git show --name-only --format= "$c" 2>/dev/null)
+    if [ -n "$CODE_RE" ]; then
+      printf '%s\n' "$files" | grep -qE "$CODE_RE" && { echo x; cat >/dev/null; return; }
+    else
+      printf '%s\n' "$files" | grep -qvE '^(\.beans/|$)' && { echo x; cat >/dev/null; return; }
+    fi
+  done
+}
+has_reverts=0
+git log "$DROVER_UPSTREAM" --format=%B | grep -q '^This reverts commit ' && has_reverts=1
 out=$(mktemp)
-git ls-tree -r --name-only ${DROVER_UPSTREAM} -- .beans 2>/dev/null | while read -r bf; do
+git ls-tree -r --name-only "$DROVER_UPSTREAM" -- .beans 2>/dev/null | while read -r bf; do
   bean=$(printf '%s' "$bf" | grep -oE "$DROVER_BEAN_RE" | head -1); [ -n "$bean" ] || continue
   [ "$(git show "${DROVER_UPSTREAM}:$bf" 2>/dev/null | sed -n 's/^status: //p' | head -1)" = completed ] || continue
+  missing=""; landed=0
   for b in $(git for-each-ref --format='%(refname:short)' "refs/heads/fleet/*-$bean" 2>/dev/null); do
-    hit=$(git cherry ${DROVER_UPSTREAM} "$b" 2>/dev/null | awk '/^\+/{print $2}' | while read -r c; do
-      files=$(git show --name-only --format= "$c" 2>/dev/null)
-      if [ -n "$CODE_RE" ]; then
-        printf '%s\n' "$files" | grep -qE "$CODE_RE" && { echo x; break; }
-      else
-        # any changed path that is not a bean file and not blank = code not landed
-        printf '%s\n' "$files" | grep -qvE '^(\.beans/|$)' && { echo x; break; }
-      fi
-    done)
-    [ -n "$hit" ] && { echo "$bean :: $b"; break; }
+    hit=$(git cherry "$DROVER_UPSTREAM" "$b" 2>/dev/null | awk '/^\+/{print $2}' | code_hit)
+    # With no outstanding patch or revert, skip the more expensive subject check.
+    if [ -z "$hit" ] && [ "$has_reverts" = 0 ]; then landed=1; break; fi
+    subjects=$("$DROVER_BIN/fleet-branch-landed" --base "$DROVER_UPSTREAM" --all "$b"); rc=$?
+    if [ "$rc" = 0 ]; then landed=1; break; fi
+    # Only missing CODE subjects count; an unmatched bean-status commit is harmless.
+    # Include ancestors too: git cherry hides a patch that was landed and later reverted.
+    hit=$(awk -F '\t' '
+      NR == FNR { if (FNR > 1) missing[$0]=1; next }
+      $2 in missing { print $1 }
+    ' <(printf '%s\n' "$subjects") <(git log "$b" --no-merges --format=$'%H\t%s') | code_hit)
+    if [ -z "$hit" ]; then landed=1; break; fi
+    missing=${missing:-$b}
   done
+  [ "$landed" = 0 ] && [ -n "$missing" ] && echo "$bean :: $missing"
 done | sort -u > "$out"
 n=$(grep -c . "$out")
 { echo "$n"; date -u +%FT%TZ; cat "$out"; } > "$CACHE"

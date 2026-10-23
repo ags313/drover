@@ -30,15 +30,48 @@ if [ -z "$base" ]; then base=$DROVER_UPSTREAM; g fetch -q "$DROVER_REMOTE" "$DRO
 for r in "$base" "$br"; do
   g rev-parse -q --verify "$r^{commit}" >/dev/null || { echo "fleet-branch-landed: unknown ref $r" >&2; exit 2; }
 done
+# Walk newest first: an active revert removes its target, and a revert of that
+# revert restores it. Revert messages themselves are never landing evidence.
+history=$(g log "$base" --topo-order --format='%H%x1f%B%x1e' | awk '
+  BEGIN { RS="\036"; FS="\037" }
+  {
+    sha=$1; gsub(/^[\n]+|[\n]+$/, "", sha)
+    if (sha == "") next
+    n=split($2, lines, "\n"); target=""
+    for (i=1; i<=n; i++)
+      if (lines[i] ~ /^This reverts commit [0-9a-f]+\.$/) {
+        target=lines[i]; sub(/^This reverts commit /, "", target); sub(/\.$/, "", target)
+      }
+    if (removed[sha]) {
+      if (target == "") print "REMOVED " sha " " removed[sha]
+      next
+    }
+    if (target != "") removed[target]=sha
+    else print $2
+  }')
+# Resolve HEAD as well as explicit refs; unnamed commits have no bean ownership.
+branch_bean=$(drover_bean_ids "$(g rev-parse --symbolic-full-name "$br")" | tail -1)
 miss=(); oldest=0; now=$(date +%s)
 while IFS=$'\t' read -r ct subj; do
   [ -n "$subj" ] || continue
-  # merge commits are already out (--no-merges): a one-parent commit whose subject starts "Merge " is ordinary work
   case "$subj" in wip:*) [ "$all" = 1 ] || continue ;; esac
-  [ "$all" = 1 ] || [ -n "$(drover_bean_ids "$subj")" ] || continue   # base noise (names no bean) is not this seat's work
-  if [ -z "$(g log "$base" -F --grep="${subj:0:70}" --format=%h -1 2>/dev/null)" ]; then
+  [ "$all" = 1 ] || [ -n "$(drover_bean_ids "$subj")" ] || continue
+  if ! grep -qF -- "${subj:0:70}" <<<"$history"; then
     miss+=("$subj"); a=$(( (now - ct) / 60 )); [ "$a" -gt "$oldest" ] && oldest=$a
   fi
-done < <(g log "$base..$br" --no-merges --format=$'%ct\t%s' 2>/dev/null)
+done < <(
+  g log "$base..$br" --no-merges --format=$'%ct\t%s' 2>/dev/null
+  # Ancestors are inherited main history, except reverted work naming this bean.
+  # Another bean's revert must not invalidate an otherwise landed branch.
+  while read -r sha revert; do
+    [ -n "$sha" ] && [ -n "$branch_bean" ] || continue
+    subject=$(g show -s --format=%s "$sha")
+    drover_bean_ids "$subject" | grep -qxF -- "$branch_bean" || continue
+    if g merge-base --is-ancestor "$sha" "$br" &&
+       ! g merge-base --is-ancestor "$revert" "$br"; then
+      g show -s --format=$'%ct\t%s' "$sha"
+    fi
+  done < <(sed -n 's/^REMOVED //p' <<<"$history")
+)
 [ ${#miss[@]} -eq 0 ] && exit 0
 echo "AGE $oldest"; printf '%s\n' "${miss[@]}"; exit 1
