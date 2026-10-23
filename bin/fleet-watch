@@ -24,10 +24,13 @@
 #   fleet-watch top-up          queue ready beans from the board (the tick's top-up step), then exit
 #   fleet-watch land-lane       one auto_push then one auto_land pass (DROVER_AUTOLAND lane), wait for both, exit
 #   fleet-watch dispatch        one inbox drain, queue top-up and refill pass (the tick's dispatch steps), then exit
+#   fleet-watch silent          recover silent idle seats (FLEET_SILENT_MINUTES, default 5)
 #   fleet-watch dialogs         one pass answering the known blocking dialogs on every seat (the tick's step), then exit
 #   fleet-watch unpark <bean>   lift a BLOCKED bean's park and re-queue it
 #   fleet-watch enqueue <bean>  add a bean to the global queue
 #   fleet-watch queue           show the queue
+# Bean/seat identifiers and timestamped state paths contain no whitespace; sorted ls lists are intentional.
+# shellcheck disable=SC2010,SC2012,SC2013,SC2045
 set -uo pipefail
 # shellcheck source=drover-env
 . "$(dirname "$0")/drover-env"
@@ -87,6 +90,12 @@ Run the tick's dispatch steps once — drain the inbox, top up the queue, refill
 Mutating.
 H
       ;;
+    silent) cat <<'H'
+fleet-watch silent
+Nudge an idle seat with tracked changes or unreported commits after FLEET_SILENT_MINUTES (default 5).
+One nudge per bean; a second silent stop flags needs lead: silent seat. Announcements suppress recovery.
+H
+      ;;
     dialogs) cat <<'H'
 fleet-watch dialogs
 Run the tick's dialog pass once: read the last 8 lines of every seat and answer the known blocking dialogs
@@ -115,10 +124,8 @@ Run one watcher tick (dialogs, budget, inbox, refill), then exit. Mutating.
 --dry-run  print preview; do not tick
 H
       ;;
-    run) sed -n '2,29p' "$0" ;;
-    *) sed -n '2,29p' "$0" ;;
-    run) sed -n '2,27p' "$0" ;;
-    *) sed -n '2,27p' "$0" ;;
+    run) sed -n '2,31p' "$0" ;;
+    *) sed -n '2,31p' "$0" ;;
   esac
 }
 
@@ -376,7 +383,7 @@ review_verdict(){ local st="$1" sum="$2" rep="$3" v p
   case "$sum" in APPROVE*) echo "APPROVE (announced)"; return 0;; CHANGES*) echo "CHANGES (announced)"; return 0;; esac
   [ "$st" = CHANGES ] && { echo "CHANGES (announced)"; return 0; }
   [ -f "$rep" ] || return 1
-  v=$(grep -oiE 'verdict[*:# ]*(approve|changes)' "$rep" | tail -1 | tr a-z A-Z | grep -oE 'APPROVE|CHANGES')
+  v=$(grep -oiE 'verdict[*:# ]*(approve|changes)' "$rep" | tail -1 | tr '[:lower:]' '[:upper:]' | grep -oE 'APPROVE|CHANGES')
   [ -n "$v" ] && { echo "$v (VERDICT line)"; return 0; }
   p=$("$DROVER_BIN"/fleet-judge verdict "$rep" 2>/dev/null) || return 1
   if awk -v p="$p" 'BEGIN{exit !(p+0 >= 0.8)}'; then echo "APPROVE (fleet-judge p=$p)"
@@ -414,6 +421,8 @@ seat_scan(){ local st="$STATE/seat-scan.stamp" now f s r cls conf ts bean rest r
 drain_inbox(){
   for m in $(find "$INBOX" -name '*.msg' -type f 2>/dev/null | sort); do
     IFS=$'\t' read -r ts a bean state summary report < "$m"; rm -f "$m"
+    case $state in DONE|BLOCKED|PARTIAL)
+      mkdir -p "$STATE/silent/$bean"; : > "$STATE/silent/$bean/announced" ;; esac
     log "INBOX $a $bean $state — ${summary:0:70}"
     noop_count "$a" "$bean" "$state" "$report"
     # an announcement on a bean supersedes any followup still queued for it on this agent
@@ -509,14 +518,14 @@ reap_tasks(){
     fi
     holder=$(grep -l -- "	$bean	" "$TASKS"/* 2>/dev/null | grep -v "/$a$" | head -1 || true)
     if [ -n "$holder" ]; then rm -f "$f"; log "RELEASED $a — $bean was re-routed to $(basename "$holder") (held ${age}m)"; continue; fi
-    if [ -n "$(ls "$REPORTS"/$a-*"$bean"*.md 2>/dev/null)" ] && [ "$free" = 1 ]; then
+    if [ -n "$(ls "$REPORTS"/"$a"-*"$bean"*.md 2>/dev/null)" ] && [ "$free" = 1 ]; then
       rm -f "$f"; log "RELEASED $a — already reported on $bean and idle (held ${age}m)"; continue
     fi
     # `fleet status` says `done` mid-turn, so age is the real evidence. A reviewer
     # silent for 45 min lost its prompt; a coder legitimately works far longer.
     idle_min=45; case "$a" in *coder*) idle_min=90;; esac
     [ "$state" = MISSING ] && idle_min=0   # no pane = nothing is running
-    if [ "$free" = 1 ] && [ "$age" -ge "$idle_min" ] && [ -z "$(ls "$REPORTS"/$a-*"$bean"*.md 2>/dev/null)" ]; then
+    if [ "$free" = 1 ] && [ "$age" -ge "$idle_min" ] && [ -z "$(ls "$REPORTS"/"$a"-*"$bean"*.md 2>/dev/null)" ]; then
       rep4=$(cut -f4 "$f" 2>/dev/null); rm -f "$f"
       case "$a" in *reviewer*|*analyst*|*architect*|*-sre)
         coder=$(printf '%s' "$rep4" | sed -nE 's/.*-by-([a-z0-9-]+)\.md$/\1/p')
@@ -663,6 +672,59 @@ auto_announce(){
     v=$(grep -oE '^(DONE|BLOCKED|PARTIAL|CHANGES)\b' "$rep" | tail -1); v=${v:-DONE}
     "$DROVER_BIN"/fleet-done "$a" "$b" "$v" "auto-announced by watcher: seat idle with a newer report (never ran fleet-done)" "$rep" >/dev/null 2>&1 \
       && log "AUTO-ANNOUNCE $a $b $v (idle, report $(basename "$rep") newer than task)"
+  done
+}
+
+# Observe continuous idle time, not task age: status can briefly say done mid-turn.
+# Nudge history survives watcher restarts and is shared by every dispatch of this bean.
+silent_seats(){
+  local minutes=${FLEET_SILENT_MINUTES:-5} now st t a b status key dir since cwd dirty ahead
+  case $minutes in ''|*[!0-9]*) minutes=5 ;; esac
+  now=$(date +%s); st=$("$DROVER_BIN"/fleet status 2>/dev/null) || :
+  mkdir -p "$STATE/silent"
+  for t in "$TASKS"/*; do
+    [ -f "$t" ] || continue
+    a=${t##*/}; b=$(cut -f2 "$t" | head -1); [ -n "$b" ] || continue
+    dir="$STATE/silent/$b"; mkdir -p "$dir"
+    key=$(cksum < "$t")
+    if [ "$(cat "$dir/task" 2>/dev/null)" != "$key" ]; then
+      printf '%s\n' "$key" > "$dir/task"
+      rm -f "$dir/idle" "$dir/announced"
+    fi
+    [ -f "$dir/announced" ] && continue
+    # Include announcements awaiting the inbox drain (and auto_announce this tick).
+    if awk -F '\t' -v a="$a" -v b="$b" '$2==a && $3==b && $4 ~ /^(DONE|BLOCKED|PARTIAL)$/ {f=1} END{exit !f}' "$INBOX"/*.msg 2>/dev/null; then
+      : > "$dir/announced"; continue
+    fi
+    status=$(printf '%s\n' "$st" | awk -v a="$a" '$1==a{print $3}')
+    case $status in
+      idle|done) ;;
+      *) rm -f "$dir/idle"; continue ;;
+    esac
+    if [ ! -f "$dir/idle" ]; then printf '%s\n' "$now" > "$dir/idle"; fi
+    since=$(cat "$dir/idle")
+    [ $((now-since)) -ge $((minutes*60)) ] || continue
+    cwd=$(capped 10 herdr agent get "$a" 2>/dev/null | jq -r '.result.agent.cwd // empty')
+    [ -n "$cwd" ] && [ "$cwd" != "$REPO" ] || continue
+    # The task file assigns the bean; hand-dispatched seats may retain their seat branch.
+    cwd=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || continue
+    [ "$cwd" != "$REPO" ] || continue
+    dirty=$(git -C "$cwd" status --porcelain --untracked-files=no 2>/dev/null) || continue
+    ahead=$(git -C "$cwd" rev-list --count "${DROVER_MAIN_BRANCH}..HEAD" 2>/dev/null) || ahead=0
+    [ -n "$dirty" ] || [ "${ahead:-0}" -gt 0 ] || continue
+    [ -f "$dir/flagged" ] && continue
+    if [ -f "$dir/nudged" ]; then
+      # Give the nudge a full settle window even if the working transition was missed.
+      [ $((now-$(cat "$dir/nudged"))) -ge $((minutes*60)) ] || continue
+      printf '%s %s needs lead: silent seat\n' "$a" "$b" >> "$STATE/blocked"
+      : > "$dir/flagged"; log "needs lead: silent seat $a $b"
+    else
+      # Reserve before sending: an ambiguous prompt failure must never double-send.
+      printf '%s\n' "$now" > "$dir/nudged"
+      log "NUDGE $a $b"
+      capped 15 herdr agent prompt "$a" "finish $b: run the gate, commit, report, announce with fleet-done" >/dev/null 2>&1 || log "NUDGE prompt failed $a $b — lead should inspect"
+      rm -f "$dir/idle"
+    fi
   done
 }
 
@@ -858,7 +920,7 @@ inventory_alert(){
   [ -f "$m" ] && age=$(( ( $(date +%s) - $(drover_mtime "$m" 2>/dev/null || echo 0) ) / 60 ))
   [ "$age" -lt 30 ] && return 0
   : > "$m"
-  local ahead cap; ahead=$(cd "$REPO" && git rev-list --count ${DROVER_UPSTREAM}..HEAD 2>/dev/null || echo 0)
+  local ahead cap; ahead=$(cd "$REPO" && git rev-list --count "${DROVER_UPSTREAM}..HEAD" 2>/dev/null || echo 0)
   cap=$(cat "$STATE/inventory-warn" 2>/dev/null); cap="${cap:-15}"
   [ "${ahead:-0}" -ge "$cap" ] && log "INVENTORY WARN: local ${DROVER_MAIN_BRANCH} $ahead commit(s) ahead of origin (undeployed) >= $cap — verify+push via fleet-push"
   local cm="$STATE/last-completed-audit" cage=999
@@ -878,7 +940,7 @@ heal_repo(){
   # human. Pin --git-dir/--work-tree so a stray core.worktree can't redirect the switch.
   local base; base=$(git --git-dir="$REPO/.git" --work-tree="$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null)
   [ "$base" = "${DROVER_MAIN_BRANCH}" ] && return 0
-  if git --git-dir="$REPO/.git" --work-tree="$REPO" switch ${DROVER_MAIN_BRANCH} >/dev/null 2>&1; then
+  if git --git-dir="$REPO/.git" --work-tree="$REPO" switch "${DROVER_MAIN_BRANCH}" >/dev/null 2>&1; then
     log "AUTO-HEALED \$DROVER_REPO from '$base' back to ${DROVER_MAIN_BRANCH}"
   else
     log "REPO OFF MAIN (on '$base') — switch to ${DROVER_MAIN_BRANCH} blocked (conflict/untracked); dispatch+land paused. Restore \$DROVER_REPO."
@@ -938,6 +1000,7 @@ route_land_conflicts(){
     [ -n "$seat" ] || { log "LAND-ROUTE $b: no live coder — flag kept"; continue; }
     mkdir -p "$FLEET_BRIEFS" "$STATE/followups" "$STATE/owner"   # `route-land` runs without a tick's owner_sync
     bt="${DROVER_BUILD:-run the project build}"; [ -n "${DROVER_TEST_CHANGED:-}" ] && bt="$bt; $DROVER_TEST_CHANGED"
+    # shellcheck disable=SC2015
     printf '# Landing fix round: %s\n\nApproved, but it does not land on current '"${DROVER_MAIN_BRANCH}"':\n\n    %s\n\nPrevious owner: %s. It is yours now.\n\n1. Branch fleet/%s-%s from current '"${DROVER_MAIN_BRANCH}"'; cherry-pick this bean'"'"'s commits (git log '"${DROVER_MAIN_BRANCH}"'..<old branch> --grep %s); resolve there. Never hand-merge a generated file (see DROVER_GENERATED): take '"${DROVER_MAIN_BRANCH}"''"'"'s copy and regenerate.\n2. If '"${DROVER_MAIN_BRANCH}"' already has the work, say so and announce DONE "already on '"${DROVER_MAIN_BRANCH}"'".\n3. %s\n4. Report REBASED/VERIFIED/DONE with SHAs; fleet-done %s %s DONE "<one line>" <report>\n' \
       "$b" "$reason" "${owner:-none}" "$seat" "$b" "$b" "$bt" "$seat" "$b" > "$FLEET_BRIEFS/land-$b.md" \
     && echo "$seat" > "$STATE/owner/$b" \
@@ -986,7 +1049,7 @@ push_batch_ready(){
   case $wait in ''|*[!0-9]*) wait=0 ;; esac
   [ "$1" -ge "$min" ] && return 0
   [ "$wait" -gt 0 ] || return 1
-  first=$(cd "$REPO" && git log --format=%ct ${DROVER_UPSTREAM}..HEAD 2>/dev/null | tail -1)
+  first=$(cd "$REPO" && git log --format=%ct "${DROVER_UPSTREAM}..HEAD" 2>/dev/null | tail -1)
   age=$(( ($(date +%s) - ${first:-$(date +%s)}) / 60 ))
   [ "$age" -ge "$wait" ] || return 1
   log "AUTO-PUSH: $1 ahead < DROVER_PUSH_MIN_AHEAD=$min, oldest unpushed commit ${age}m old >= DROVER_PUSH_MAX_WAIT_MIN=$wait — pushing the batch"
@@ -1000,18 +1063,18 @@ auto_push(){
   [ -d "$STATE/.land-lock" ] && return 0          # a land is mid-flight — let it finish first
   backoff_wait && return 0                        # a recent gate failure: wait out the backoff
   load_ok || return 0                             # the machine is short of memory: do not start a gate now
-  local ahead; ahead=$(cd "$REPO" && git rev-list --count ${DROVER_UPSTREAM}..HEAD 2>/dev/null)
+  local ahead; ahead=$(cd "$REPO" && git rev-list --count "${DROVER_UPSTREAM}..HEAD" 2>/dev/null)
   [ "${ahead:-0}" -gt 0 ] || return 0
   push_batch_ready "$ahead" || return 0
   local PK="$STATE/.push-lock"
   push_lock_held && return 0
   mkdir "$PK" 2>/dev/null || return 0
-  ( sh -c 'echo $PPID' > "$PK/pid"; cd "$REPO"
+  ( sh -c 'echo $PPID' > "$PK/pid"; cd "$REPO" || exit
     # The gate is a heavy run: it takes the push slot, so it never stacks on top of other suites.
-    "$DROVER_BIN"/fleet-slot run --push -- "$DROVER_BIN"/fleet-verify-main ${DROVER_MAIN_BRANCH} >"$STATE/auto-push-verify.log" 2>&1; vrc=$?
+    "$DROVER_BIN"/fleet-slot run --push -- "$DROVER_BIN"/fleet-verify-main "${DROVER_MAIN_BRANCH}" >"$STATE/auto-push-verify.log" 2>&1; vrc=$?
     if [ "$vrc" -eq 0 ] || [ "$vrc" -eq 3 ]; then rm -f "$STATE/push-backoff"; else backoff_fail; fi
     if [ "$vrc" -eq 0 ]; then
-      out=$(git push "${DROVER_REMOTE}" ${DROVER_MAIN_BRANCH} 2>&1 | tail -4)
+      out=$(git push "${DROVER_REMOTE}" "${DROVER_MAIN_BRANCH}" 2>&1 | tail -4)
       if printf '%s' "$out" | grep -q "${DROVER_MAIN_BRANCH} -> ${DROVER_MAIN_BRANCH}"; then
         printf '%s\tPUSHED\t%s\n' "$(date -u +%FT%TZ)" "$ahead" >> "$LEDGER" 2>/dev/null
         log "AUTO-PUSH: $ahead commit(s) -> origin (full-suite green)"
@@ -1044,7 +1107,7 @@ harvest_step(){ local h; h=$("$DROVER_BIN"/fleet-harvest-beans 2>/dev/null | gre
 tick(){
   if [ -f "$STATE/observer" ]; then observe_tick; return; fi
   local _t0=$SECONDS
-  T clear_dialogs; T heal_repo; T check_budget; T harvest_step; T drain_inbox; T auto_announce; T retry_reviews
+  T clear_dialogs; T heal_repo; T check_budget; T harvest_step; T drain_inbox; T auto_announce; T silent_seats; T retry_reviews
   T reap_tasks; T seat_scan; T owner_sync; T sweep_guard; T snapshot_wip; T inventory_alert; T yolo_guard
   T unblock_pass; T ghost_reap; T top_up_queue; T refill
   [ "${DROVER_AUTOLAND:-0}" = 1 ] && { T auto_push; T auto_land; T route_land_conflicts; }   # push first: see auto_land
@@ -1076,6 +1139,7 @@ if [ "${1:-run}" = route-land ]; then route_land_conflicts; exit 0; fi
 if [ "${1:-run}" = auto-push ]; then auto_push; wait; exit 0; fi
 if [ "${1:-run}" = top-up ]; then top_up_queue; exit 0; fi
 if [ "${1:-run}" = land-lane ]; then auto_push; wait; auto_land; wait; exit 0; fi
+if [ "${1:-run}" = silent ]; then silent_seats; exit 0; fi
 if [ "${1:-run}" = dialogs ]; then clear_dialogs; exit 0; fi
 if [ "${1:-run}" = dispatch ]; then drain_inbox; top_up_queue; refill; exit 0; fi
 log "fleet-watch started (tick ${TICK}s)"

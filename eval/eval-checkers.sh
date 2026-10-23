@@ -51,6 +51,8 @@ BIN="$(cd "$(dirname "$0")/../bin" && pwd)"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 # Hermetic git: a user's global config (commit.gpgsign with a key this shell cannot reach, hooks, templates)
 # made every scratch commit fail and every case after it wrong.
+# Inherited command-scope config can rewrite scratch remotes too.
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export DROVER_CONFIG=/dev/null DROVER_HOME="$T/home" DROVER_REPO="$T/repo" FLEET_STATE="$T/home/state"
 export FLEET_REPORTS="$T/home/reports" FLEET_TASKS="$T/home/tasks"
@@ -682,5 +684,89 @@ grep -qx 'cl-trust Down Enter' "$T/keys" && grep -q 'dialog: trusted own worktre
   && ok 'clear_dialogs: the Claude folder-trust case is unchanged (Down Enter)' || bad "claude trust: keys=$(tr '\n' '|' < "$T/keys" 2>/dev/null)"
 [ "$(wc -l < "$T/keys")" = 2 ] && ok 'clear_dialogs: cursor on "2. Quit" and bare "enter continue" chrome get no keys' \
   || bad "dialog keys sent to the wrong seats: $(tr '\n' '|' < "$T/keys")"
+
+# Silent seat recovery: real tracked changes, persistent state, bounded prompt stub.
+mkdir -p "$T/sbin" "$T/silent/tasks" "$T/silent/inbox"
+cp "$BIN"/fleet-watch "$BIN"/drover-env "$T/sbin/"
+git clone -q "$T/origin.git" "$T/silent-wt" 2>/dev/null
+git -C "$T/silent-wt" checkout -qb main origin/main
+git -C "$T/silent-wt" checkout -qb fleet/test-coder
+printf 'dirty\n' >> "$T/silent-wt/src/a.txt"
+cat > "$T/sbin/fleet" <<'STUB'
+#!/usr/bin/env bash
+printf 'NAME KIND STATE\ntest-coder opencode %s\nother-coder opencode MISSING\n' "$(cat "$SILENT_ROOT/status")"
+exit 1 # Real fleet status returns nonzero if another roster seat is missing.
+STUB
+cat > "$T/sbin/herdr" <<'STUB'
+#!/usr/bin/env bash
+case $2 in
+  get) jq -n --arg cwd "$SILENT_ROOT/../silent-wt" '{result:{agent:{cwd:$cwd}}}' ;;
+  prompt) printf '%s\n' "$*" >> "$SILENT_ROOT/prompts" ;;
+esac
+STUB
+chmod +x "$T/sbin/fleet" "$T/sbin/herdr"
+printf '1\tbean-silent\n' > "$T/silent/tasks/test-coder"
+echo done > "$T/silent/status"
+spass(){ PATH="$T/sbin:$PATH" SILENT_ROOT="$T/silent" FLEET_TASKS="$T/silent/tasks" FLEET_STATE="$T/silent/state" FLEET_INBOX="$T/silent/inbox" "$T/sbin/fleet-watch" silent >/dev/null; }
+sdir="$T/silent/state/silent/bean-silent"
+spass
+[ ! -f "$T/silent/prompts" ] && ok 'silent: fresh idle seat is not nudged' || bad 'silent: premature nudge'
+echo $(( $(date +%s)-300 )) > "$sdir/idle"
+spass; spass
+[ "$(wc -l < "$T/silent/prompts")" = 1 ] && grep -q 'finish bean-silent: run the gate, commit, report, announce with fleet-done' "$T/silent/prompts" \
+  && [ "$(grep -c 'NUDGE test-coder bean-silent$' "$T/silent/watch.log")" = 1 ] \
+  && ok 'silent: five minutes idle with tracked changes sends exactly one nudge' || bad 'silent: missing or repeated prompt'
+echo working > "$T/silent/status"; spass
+echo done > "$T/silent/status"; spass
+echo $(( $(date +%s)-300 )) > "$sdir/idle"
+echo $(( $(date +%s)-300 )) > "$sdir/nudged"
+spass; spass
+[ "$(wc -l < "$T/silent/prompts")" = 1 ] && [ "$(grep -c 'needs lead: silent seat' "$T/silent/state/blocked")" = 1 ] \
+  && ok 'silent: second stop flags the bean once without another nudge' || bad 'silent: second-stop escalation'
+# Announcements suppress even an overdue idle seat; keep each verdict in the inbox.
+for verdict in DONE BLOCKED PARTIAL; do
+  rm -f "$sdir/announced" "$sdir/nudged" "$sdir/flagged"
+  printf '2\ttest-coder\tbean-silent\t%s\tsummary\treport\n' "$verdict" > "$T/silent/inbox/a.msg"
+  spass
+  [ -f "$sdir/announced" ] && [ "$(wc -l < "$T/silent/prompts")" = 1 ] \
+    && ok "silent: $verdict announcement prevents nudge" || bad "silent: nudged after $verdict"
+done
+# A clean worktree with bean commits still needs recovery; untracked-only does not.
+rm -f "$T/silent/inbox/a.msg" "$sdir/announced" "$sdir/nudged" "$sdir/flagged"
+git -C "$T/silent-wt" -c user.name=eval -c user.email=eval@example.invalid commit -qam 'bean-silent work'
+spass
+[ "$(wc -l < "$T/silent/prompts")" = 2 ] && ok 'silent: clean tree with commits ahead is nudged' || bad 'silent: missed unreported commits'
+
+# Clean at the base (including untracked-only scratch) is never unfinished work.
+git -C "$T/silent-wt" branch -f main HEAD
+rm -f "$sdir/nudged" "$sdir/flagged"
+echo scratch > "$T/silent-wt/untracked"
+spass
+[ "$(wc -l < "$T/silent/prompts")" = 2 ] && ok 'silent: untracked-only tree at base is not nudged' || bad 'silent: nudged a clean tracked tree'
+echo dirty >> "$T/silent-wt/src/a.txt"
+echo working > "$T/silent/status"; spass
+echo done > "$T/silent/status"; spass
+[ "$(wc -l < "$T/silent/prompts")" = 2 ] && ok 'silent: working resets the continuous idle window' || bad 'silent: task age mistaken for idle age'
+
+# An announcement belongs to a dispatch, not all future rounds of the bean.
+printf '10\tbean-round\n' > "$T/silent/tasks/test-coder"
+printf '11\ttest-coder\tbean-round\tDONE\tsummary\treport\n' > "$T/silent/inbox/a.msg"
+spass
+rdir="$T/silent/state/silent/bean-round"
+rm -f "$T/silent/inbox/a.msg" # Simulate the inbox drain after recording the marker.
+echo $(( $(date +%s)-300 )) > "$rdir/idle"
+spass
+[ -f "$rdir/announced" ] && [ "$(wc -l < "$T/silent/prompts")" = 2 ] \
+  && ok 'silent: drained DONE still suppresses the same task' || bad 'silent: lost announcement on same task'
+printf '12\tbean-round\n' > "$T/silent/tasks/test-coder"
+spass
+echo $(( $(date +%s)-300 )) > "$rdir/idle"
+spass; spass
+[ ! -f "$rdir/announced" ] && [ "$(wc -l < "$T/silent/prompts")" = 3 ] \
+  && [ "$(grep -c 'NUDGE test-coder bean-round$' "$T/silent/watch.log")" = 1 ] \
+  && ok 'silent: new task for an announced bean gets one nudge after five idle minutes' || bad 'silent: old DONE hid a later round'
+help=$("$T/sbin/fleet-watch" --help)
+printf '%s\n' "$help" | grep -q 'fleet-watch enqueue' && printf '%s\n' "$help" | grep -q 'fleet-watch queue ' \
+  && ok 'watch help includes enqueue and queue' || bad 'watch help truncates usage'
 
 [ "$fail" = 0 ] && echo 'all checker cases pass' || { echo 'checker cases FAILED'; exit 1; }
