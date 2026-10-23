@@ -527,6 +527,8 @@ reap_tasks(){
     [ "$state" = MISSING ] && idle_min=0   # no pane = nothing is running
     if [ "$free" = 1 ] && [ "$age" -ge "$idle_min" ] && [ -z "$(ls "$REPORTS"/"$a"-*"$bean"*.md 2>/dev/null)" ]; then
       rep4=$(cut -f4 "$f" 2>/dev/null); rm -f "$f"
+      # A silent release hands the bean back; preserve any newer owner.
+      if [ "$(cat "$STATE/owner/$bean" 2>/dev/null)" = "$a" ]; then rm -f "$STATE/owner/$bean"; fi
       case "$a" in *reviewer*|*analyst*|*architect*|*-sre)
         coder=$(printf '%s' "$rep4" | sed -nE 's/.*-by-([a-z0-9-]+)\.md$/\1/p')
         if [ -n "$coder" ]; then mkdir -p "$STATE/reviews"; printf '%s\n' "$coder" > "$STATE/reviews/$bean"; fi ;;
