@@ -1,13 +1,13 @@
 ---
 # drover-2kiu
 title: 'fleet-watch and fleet-push: pull origin main into local main from time to time'
-status: todo
+status: completed
 type: feature
 priority: normal
 tags:
     - watcher
 created_at: 2026-10-21T19:57:25Z
-updated_at: 2026-10-21T19:57:25Z
+updated_at: 2026-10-23T13:41:32Z
 ---
 
 Owner request (2026-10-21): "drover should be able to pull from time to time".
@@ -27,7 +27,27 @@ Seats do not change: `fleet sync` moves their worktrees after a pull, as now.
 
 ## Acceptance
 
-- [ ] `eval/eval-checkers.sh` cases: behind → ff; diverged clean → merge commit; conflict → main untouched and one log line; dirty checkout → skipped; `DROVER_PULL_MIN=0` → no fetch
-- [ ] `fleet-push` on a behind main stops with the message, no push attempt
-- [ ] README: the `DROVER_PULL_MIN` knob and `fleet pull`
-- [ ] the drover gate (`fleet-push` checker suite) is green
+- [x] `eval/eval-checkers.sh` cases: behind → ff; diverged clean → merge commit; conflict → main untouched and one log line; dirty checkout → skipped; `DROVER_PULL_MIN=0` → no fetch
+- [x] `fleet-push` on a behind main stops with the message, no push attempt
+- [x] README: the `DROVER_PULL_MIN` knob and `fleet pull`
+- [x] the drover gate (`fleet-push` checker suite) is green
+
+## Review follow-up
+
+Fetches in both fleet-pull and fleet-push now disable terminal credential prompts and enforce a
+60-second process-group deadline (DROVER_FETCH_TIMEOUT_SEC). Pull and push locks with dead owners
+are reclaimed immediately; ownerless locks expire after 30 minutes. Live owners are preserved,
+and a held lock logs why the pull skipped. Regression cases cover timeouts and descendant cleanup,
+retry after timeout, and dead/live/ownerless lock handling with autoland off and observer configured.
+
+## Summary of Changes
+
+Fixed all three review robustness gaps in commit 9651c5e.
+
+1. Shared drover_fetch now bounds both fleet-pull and fleet-push fetches to 60 seconds by default (DROVER_FETCH_TIMEOUT_SEC), disables terminal credential prompts, and kills the whole fetch process group on timeout. The bounded foreground pull cannot hang the watcher indefinitely.
+2. Pull locks now record their owner PID. Dead owners are reclaimed immediately; ownerless locks expire after the existing 30-minute push-lock grace. Live owners are preserved regardless of lock age. Contention logs a skip.
+3. fleet-pull checks push-lock ownership itself, so dead/aged-ownerless push locks are reclaimed even with autoland disabled or observer mode configured. A held push lock logs a skip.
+
+Added regressions for both fetch timeouts, disabled prompts, descendant termination, successful retry after timeout, and dead/live/fresh-ownerless/aged-ownerless pull and push locks. Updated README and the bean's follow-up notes; all acceptance boxes remain checked. Kept the optional dirty-checkout logging at one line per due pass.
+
+bob check passed on the final commit: nix-shell --run 'bash eval/eval-checkers.sh'. Worktree is clean. No project branch was pushed.

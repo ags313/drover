@@ -79,10 +79,11 @@ mid-review was interrupted then double-assigned, a third was displaced out from 
 `docs/LESSONS.md`, "Two managers collide"). **Exactly one thing dispatches, reviews, lands and pushes at a
 time.**
 
-- **Observer mode** (`touch state/observer`) turns the watcher into a pure observer: every tick becomes
+- **Observer mode** (`touch state/observer`) turns off dispatch and landing: every tick becomes
   `fleet-observe` instead of the mutating lanes above — it reads state, logs, and alerts, and never presses
   a key in a pane, reassigns a bean, lands, or pushes (`rm state/observer` restores the normal lanes). Use
   it when a human or the agents themselves are going to own dispatch/landing directly for a while.
+  Periodic pulls still refresh and integrate remote main, respecting landing and push locks.
 - **The lead queue** is what a human or lead uses to hand out work while the watcher stays observer-only:
   write a TAB-delimited `<bean>\t<harnesses-or-*>\t<prompt>` line to `state/lead-queue` and list eligible
   seats in `state/lead-pool` (a `:named` suffix restricts a seat to lines that name it explicitly). Every
@@ -334,7 +335,8 @@ scripts call each other by absolute path, so only your interactive shell is affe
 | `fleet-prep <seat> <bean> [worktree]` | Put a seat's worktree on `fleet/<seat>-<bean>` before its brief (`fleet assign` runs it). Details below the table. |
 | `fleet-land-bean` | Land ONE approved bean to LOCAL main: cherry-pick its own branch in an isolated worktree, gate, ff-only. Never pushes. Used by auto-land; run by hand too. |
 | `fleet-verify-main` | The cumulative merge-queue gate: full build+suite on a clean detached worktree at a ref. Exit 0 = safe to push. |
-| `fleet-push` | The only sanctioned push: runs `fleet-verify-main`, pushes local main to origin only if green. Never force. |
+| `fleet-pull` / `fleet pull` | Fetch and integrate remote main once: fast-forward when behind, merge when diverged. Conflicts abort and leave one log line and inbox `.note` per remote tip for the lead. Tracked dirt skips; bean-only changes commit first as `chore(beans): sync board state`. `fleet sync` updates seats afterward. The watcher pulls in observer mode too; active landing/push locks defer integration. Dead pull/push owners are reclaimed immediately; ownerless locks expire after 30 minutes, and held pull/push locks log a skip. |
+| `fleet-push` | The only sanctioned push: fetches first and stops if main is behind (run `fleet pull`); runs `fleet-verify-main`, pushes local main to origin only if green. Never force. |
 | `fleet-scoreboard` | What shipped vs what's stuck: landed/pushed today, approved-awaiting-land, in-review, integrity drift. The metric that isn't utilization. |
 | `fleet-landed-check` | Every bean that became `completed` on origin/main in the window must name a SHA on origin/main, or have a code-changing commit there that names it (or say `Landed: none — <reason>`). Prints `UNPROVEN`; the observer tick alerts on each. `--hours N`. |
 | `fleet-branch-landed [--base REF] [--all] [branch]` | A branch's bean-named commits that are not on REF (default `$DROVER_UPSTREAM`) BY SUBJECT. Exit 0 = landed, exit 1 = `AGE <minutes>` then the unlanded subjects. `fleet landable` and `fleet-land-bean` use it. |
@@ -391,6 +393,8 @@ values as `${VAR:-value}` so an environment variable still wins. See [`examples/
 | `DROVER_ROSTER` | 3 coders + 3 reviewers on claude/codex/opencode | `name:harness` pairs. Role = last word of the name. |
 | `DROVER_BUILD`, `DROVER_TEST` | empty | Build and single-test commands quoted into coder and reviewer briefs. `DROVER_BUILD` is also the build half of the cumulative push gate. |
 | `DROVER_AUTOLAND` | `0` | `1` lets the watcher land approved beans and push green batches. Off = landing stays with the lead. |
+| `DROVER_FETCH_TIMEOUT_SEC` | `60` | Fetch deadline in seconds for watcher/manual pulls and `fleet-push`; terminal credential prompts are disabled and timed-out fetch process groups are killed. |
+| `DROVER_PULL_MIN` | `15` | Minutes between watcher fetches and pulls into local main; `0` disables automatic pulls. |
 | `DROVER_PUSH_MIN_AHEAD` | `1` | Auto-push waits until local main is this many commits ahead of `$DROVER_REMOTE/$DROVER_MAIN_BRANCH` before it starts the verify+push, so N lands make one push and one CI run. `fleet-push` ignores it. |
 | `DROVER_PUSH_MAX_WAIT_MIN` | `0` (off) | Auto-push pushes a batch below `DROVER_PUSH_MIN_AHEAD` once its oldest unpushed commit (commit time) is this many minutes old, so one bean never waits overnight. `fleet-push` ignores it. |
 | `DROVER_TYPECHECK`, `DROVER_TEST_CHANGED` | empty | Per-bean land gate: a fast typecheck, and tests for the changed files (`$CHANGED`). Empty = that gate is skipped. |

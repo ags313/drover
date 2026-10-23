@@ -19,6 +19,7 @@
 #   fleet rm <name>                close the agent's workspace and remove its worktree (branch kept)
 #   fleet land <coder>             merge fleet/<coder> into main, parking/restoring the user's staged WIP around it
 #   fleet landable                 approved and flagged beans: branch, commits not on main, clean/CONFLICT, subject
+#   fleet pull                     fetch and integrate remote main into local main (never pushes)
 #   fleet sync [name]              bring idle agents' worktrees up to main (drop stale seeds, merge, re-seed current WIP)
 #   fleet rules                    install the fleet-peers skill package for claude/codex/cursor/grok/opencode
 #   fleet stale [--kill|--report]  processes the agents left behind: orphans (pane gone), leftovers (dev/test
@@ -119,6 +120,13 @@ H
 fleet rm <name>
 Close the agent's workspace and remove its worktree (branch kept).
 Requires --yes or a tty confirm. --dry-run prints the agent and does nothing.
+H
+      ;;
+    pull) cat <<'H'
+fleet pull
+Fetch and integrate remote main once, even when DROVER_PULL_MIN=0.
+Fast-forward or merge cleanly; conflicts are aborted and left for the lead.
+--dry-run  print the operation without fetching or merging.
 H
       ;;
     sync) cat <<'H'
@@ -1015,7 +1023,7 @@ PY
 # directory creation, ledger writes, file writes, signals, worktrees, keys, or prompts.
 has_preview() {
   case $1 in
-    assign|review|land|rm|sync|send|followup|up|finish|cancel|task|note|keys|stale|rules) return 0 ;;
+    assign|review|land|rm|sync|pull|send|followup|up|finish|cancel|task|note|keys|stale|rules) return 0 ;;
     models) [ "${2:-}" = --report ];;
     *) return 1 ;;
   esac
@@ -1055,6 +1063,7 @@ if [ "$FLEET_DRY_RUN" = 1 ]; then
   case "${1:-}" in
     assign)   preview_assign "$2" "${3:-}" "${4:-}" ;;
     review)   preview_review "$2" "${3:-}" "${4:-}" ;;
+    pull)     preview "" "" "$DROVER_MAIN_BRANCH" "fetch and merge $DROVER_UPSTREAM" ;;
     land)     preview "$2" "" "fleet/$2" "merge fleet/$2 into ${DROVER_MAIN_BRANCH}" ;;
     rm)       preview "$2" "" "fleet/$2" "rm workspace" ;;
     sync)
@@ -1103,6 +1112,7 @@ case "${1:-}" in
   rm)      cmd_rm "$2" ;;
   land)    cmd_land "$2" ;;
   landable) cmd_landable ;;
+  pull)    "$DROVER_BIN"/fleet-pull ;;
   sync)    cmd_sync "${2:-}" ;;
   task)    cmd_task "$2" "$3" ;;
   send)

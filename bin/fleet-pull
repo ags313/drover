@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Refresh and integrate remote main. Never push or move seat worktrees.
+set -uo pipefail
+# shellcheck source=drover-env
+. "$(dirname "$0")/drover-env"
+REPO="${DROVER_REPO:?set DROVER_REPO}"
+STATE="$FLEET_STATE"; LOG="$(dirname "$STATE")/watch.log"
+mkdir -p "$STATE" "$FLEET_INBOX"
+log(){ printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" | tee -a "$LOG"; }
+# A live owner is never evicted by age. An empty lock gets the same 30-minute
+# startup/crash grace as fleet-watch's push lock; dead owners are reclaimed immediately.
+lock_held(){
+  local dir=$1 kind=$2 owner age
+  [ -d "$dir" ] || return 1
+  owner=$(cat "$dir/pid" 2>/dev/null)
+  case $owner in *[!0-9]*|0) owner="" ;; esac
+  age=$(( $(date +%s) - $(drover_mtime "$dir" 2>/dev/null || echo 0) ))
+  if { [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; } ||
+     { [ -z "$owner" ] && [ "$age" -gt 1800 ]; }; then
+    rm -f "$dir/pid"
+    if rmdir "$dir" 2>/dev/null; then
+      log "PULL cleared stale $kind lock (owner ${owner:-unknown}, age ${age}s)"
+      return 1
+    fi
+  fi
+  log "PULL skipped: $kind lock held (owner ${owner:-unknown}, age ${age}s)"
+  return 0
+}
+lock_held "$STATE/.pull-lock" pull && exit 0
+mkdir "$STATE/.pull-lock" 2>/dev/null || { log "PULL skipped: pull lock acquired by another process"; exit 0; }
+echo "$$" > "$STATE/.pull-lock/pid"
+trap 'rm -f "$STATE/.pull-lock/pid"; rmdir "$STATE/.pull-lock"' EXIT
+if [ "${1:-}" = --periodic ]; then
+  min=${DROVER_PULL_MIN:-15}
+  case $min in ''|*[!0-9]*) min=15 ;; esac
+  [ "$min" -gt 0 ] || exit 0
+  last=$(cat "$STATE/last-pull" 2>/dev/null || echo 0)
+  [ $(( $(date +%s) - last )) -ge $((min * 60)) ] || exit 0
+  date +%s > "$STATE/last-pull"
+fi
+drover_fetch "$REPO" "$DROVER_REMOTE" || { log "PULL fetch failed $DROVER_REMOTE"; exit 1; }
+[ "$(git -C "$REPO" symbolic-ref --short -q HEAD)" = "$DROVER_MAIN_BRANCH" ] || { log "PULL skipped: checkout is not on $DROVER_MAIN_BRANCH"; exit 1; }
+lock_held "$STATE/.push-lock" push && exit 0
+mkdir "$STATE/.land-lock" 2>/dev/null || exit 0
+trap 'rmdir "$STATE/.land-lock"; rm -f "$STATE/.pull-lock/pid"; rmdir "$STATE/.pull-lock"' EXIT
+for op in MERGE_HEAD rebase-merge rebase-apply CHERRY_PICK_HEAD REVERT_HEAD; do
+  path=$(git -C "$REPO" rev-parse --git-path "$op")
+  [[ "$path" = /* ]] || path="$REPO/$path"
+  [ ! -e "$path" ] || { log "PULL skipped: git operation in progress"; exit 1; }
+done
+if ! git -C "$REPO" diff --quiet -- . ':(exclude).beans' ||
+   ! git -C "$REPO" diff --cached --quiet -- . ':(exclude).beans'; then
+  log "PULL skipped: dirty checkout (tracked changes)"; exit 0
+fi
+tip=$(git -C "$REPO" rev-parse "$DROVER_UPSTREAM") || exit 1
+behind=$(git -C "$REPO" rev-list --count "HEAD..$tip") || exit 1
+[ "$behind" -gt 0 ] || exit 0
+# Only board state may be staged here: tracked non-bean dirt was rejected above.
+if [ -d "$REPO/.beans" ]; then
+  git -C "$REPO" add -A -- .beans || exit 1
+  if ! git -C "$REPO" diff --cached --quiet -- .beans; then
+    git -C "$REPO" commit -qm 'chore(beans): sync board state' || exit 1
+  fi
+fi
+old=$(git -C "$REPO" rev-parse HEAD)
+ahead=$(git -C "$REPO" rev-list --count "$tip..HEAD")
+if [ "$ahead" = 0 ]; then
+  git -C "$REPO" merge --ff-only "$tip" >/dev/null 2>&1 || { log "PULL skipped: fast-forward blocked"; exit 1; }
+  log "PULL $DROVER_MAIN_BRANCH $old..$tip ($behind commits)"
+else
+  # Defer committing so failure can be aborted without moving main.
+  if git -C "$REPO" -c merge.autoStash=false merge --no-edit --no-ff --no-commit "$tip" >/dev/null 2>&1; then
+    git -C "$REPO" commit --no-edit >/dev/null 2>&1 || { git -C "$REPO" merge --abort; log "PULL merge commit failed"; exit 1; }
+    log "PULL merged $DROVER_UPSTREAM $tip into $DROVER_MAIN_BRANCH"
+  else
+    if ! git -C "$REPO" rev-parse -q --verify MERGE_HEAD >/dev/null; then
+      log "PULL skipped: merge blocked (check untracked files or git configuration)"; exit 1
+    fi
+    git -C "$REPO" merge --abort || { log "PULL abort failed — lead intervention required"; exit 1; }
+    mkdir -p "$STATE/pull-conflicts"
+    if [ ! -e "$STATE/pull-conflicts/$tip" ]; then
+      msg="PULL CONFLICT $DROVER_UPSTREAM $tip — lead merges by hand"
+      log "$msg"
+      printf '%s\n' "$msg" > "$FLEET_INBOX/pull-$tip.note"
+      : > "$STATE/pull-conflicts/$tip"
+    fi
+    exit 1
+  fi
+fi

@@ -24,6 +24,7 @@
 #   fleet-watch top-up          queue ready beans from the board (the tick's top-up step), then exit
 #   fleet-watch land-lane       one auto_push then one auto_land pass (DROVER_AUTOLAND lane), wait for both, exit
 #   fleet-watch dispatch        one inbox drain, queue top-up and refill pass (the tick's dispatch steps), then exit
+#   fleet-watch pull            one periodic pull pass (respects DROVER_PULL_MIN), then exit
 #   fleet-watch silent          recover silent idle seats (FLEET_SILENT_MINUTES, default 5)
 #   fleet-watch dialogs         one pass answering the known blocking dialogs on every seat (the tick's step), then exit
 #   fleet-watch unpark <bean>   lift a BLOCKED bean's park and re-queue it
@@ -118,14 +119,20 @@ the full-suite gate (fleet-verify-main), then the push of main. The pass the lan
 DROVER_AUTOLAND=1. Mutating.
 H
       ;;
+    pull) cat <<'H'
+fleet-watch pull
+One periodic fetch/pull pass, respecting DROVER_PULL_MIN (default 15; 0 = off).
+Use fleet pull to fetch and integrate immediately, regardless of the interval.
+H
+      ;;
     once) cat <<'H'
 fleet-watch once
 Run one watcher tick (dialogs, budget, inbox, refill), then exit. Mutating.
 --dry-run  print preview; do not tick
 H
       ;;
-    run) sed -n '2,31p' "$0" ;;
-    *) sed -n '2,31p' "$0" ;;
+    run) sed -n '2,/^# Bean/p' "$0" ;;
+    *) sed -n '2,/^# Bean/p' "$0" ;;
   esac
 }
 
@@ -1104,9 +1111,12 @@ harvest_step(){ local h; h=$("$DROVER_BIN"/fleet-harvest-beans 2>/dev/null | gre
 
 # OBSERVER MODE: two managers (the lead and this watcher) both dispatching, reviewing and landing
 # collided — the fix is one owner. With state/observer present, agents own code -> review -> push
-# themselves and the lead owns assignment; the watcher only OBSERVES and ALERTS, never mutates.
+# themselves and the lead owns assignment; the watcher observes/alerts after refreshing main.
 # `rm state/observer` restores the normal mutating lanes below.
+pull_step(){ "$DROVER_BIN"/fleet-pull --periodic; }
+
 tick(){
+  T pull_step
   if [ -f "$STATE/observer" ]; then observe_tick; return; fi
   local _t0=$SECONDS
   T clear_dialogs; T heal_repo; T check_budget; T harvest_step; T drain_inbox; T auto_announce; T silent_seats; T retry_reviews
@@ -1136,6 +1146,7 @@ observe_tick(){
   { echo "tick $(date '+%H:%M:%S') (observer)"; "$DROVER_BIN"/fleet-observe --board 2>/dev/null; } > "$STATE/last" 2>/dev/null
 }
 
+if [ "${1:-run}" = pull ]; then pull_step; exit $?; fi
 if [ "${1:-run}" = once ]; then tick; exit 0; fi
 if [ "${1:-run}" = route-land ]; then route_land_conflicts; exit 0; fi
 if [ "${1:-run}" = auto-push ]; then auto_push; wait; exit 0; fi

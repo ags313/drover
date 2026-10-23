@@ -87,6 +87,9 @@ if [ "$_drover_n" = 0 ] || [ "${!_drover_k:-}" != core.quotepath ] || [ "${!_dro
   export "GIT_CONFIG_KEY_$_drover_n=core.quotepath" "GIT_CONFIG_VALUE_$_drover_n=false" GIT_CONFIG_COUNT=$((_drover_n + 1))
 fi
 unset _drover_n _drover_k _drover_v
+# Periodic remote refresh/integration; manual fleet pull ignores the interval.
+DROVER_PULL_MIN="${DROVER_PULL_MIN:-15}"
+
 # Push batching for fleet-watch auto_push (DROVER_AUTOLAND=1): wait until main is this many commits ahead of
 # $DROVER_UPSTREAM before the verify+push starts; one land was one push and one CI run (panel2: 42 pushes on
 # 2026-10-12). DROVER_PUSH_MAX_WAIT_MIN > 0 pushes a smaller batch anyway once its oldest unpushed commit is
@@ -169,4 +172,21 @@ drover_free_mem_gb(){
   if [ -r /proc/meminfo ]; then awk '/^MemAvailable:/{print int($2/1048576); exit}' /proc/meminfo; return; fi
   local ps; ps=$(vm_stat | awk '/page size of/{print $8}'); ps=${ps:-16384}
   vm_stat | awk -v ps="$ps" '/Pages (free|inactive|speculative)/{gsub("\\.","",$NF); n+=$NF} END{printf "%d", n*ps/1073741824}'
+}
+
+# Bound network/credential helpers as a process group: a fetch must not freeze the watcher or push gate.
+# Perl is available on both supported platforms; GNU timeout is not assumed on macOS.
+drover_fetch(){
+  local seconds=${DROVER_FETCH_TIMEOUT_SEC:-60}
+  case $seconds in ''|*[!0-9]*) seconds=60 ;; esac
+  [ "$seconds" -gt 0 ] 2>/dev/null || seconds=60
+  GIT_TERMINAL_PROMPT=0 perl -e '
+    $seconds=shift;
+    $pid=fork; defined($pid) or die "fork: $!";
+    if (!$pid) { setpgrp(0,0) or die "setpgrp: $!"; exec @ARGV; die "exec: $!"; }
+    $SIG{ALRM}=sub { kill 9,-$pid; waitpid($pid,0); exit 124; };
+    alarm $seconds;
+    waitpid($pid,0);
+    exit(($? & 127) ? 128+($? & 127) : $? >> 8);
+  ' "$seconds" git -C "$1" fetch -q "$2"
 }

@@ -8,15 +8,18 @@ set -u
 . "$(dirname "$0")/drover-env"
 REPO="${DROVER_REPO:?set DROVER_REPO}"; LEDGER="$FLEET_LEDGER"; mkdir -p "$(dirname "$LEDGER")"
 [ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" = "${DROVER_MAIN_BRANCH}" ] || { echo "fleet-push: \$DROVER_REPO not on ${DROVER_MAIN_BRANCH}"; exit 1; }
-ahead=$(git -C "$REPO" rev-list --count ${DROVER_UPSTREAM}..HEAD 2>/dev/null)
+drover_fetch "$REPO" "$DROVER_REMOTE" || { echo "fleet-push: fetch failed"; exit 1; }
+behind=$(git -C "$REPO" rev-list --count "HEAD..${DROVER_UPSTREAM}") || exit 1
+[ "$behind" = 0 ] || { echo "fleet-push: main is behind ${DROVER_UPSTREAM} — run fleet pull"; exit 1; }
+ahead=$(git -C "$REPO" rev-list --count "${DROVER_UPSTREAM}..HEAD" 2>/dev/null)
 [ "${ahead:-0}" -gt 0 ] || { echo "fleet-push: nothing to push (0 ahead of origin)"; exit 0; }
 echo "fleet-push: $ahead commit(s) ahead of ${DROVER_UPSTREAM}"
 if [ "${FLEET_PUSH_FORCE:-0}" != 1 ]; then
-  "$DROVER_BIN"/fleet-verify-main ${DROVER_MAIN_BRANCH} || { echo "fleet-push: cumulative gate RED — not pushing"; exit 1; }
+  "$DROVER_BIN"/fleet-verify-main "${DROVER_MAIN_BRANCH}" || { echo "fleet-push: cumulative gate RED — not pushing"; exit 1; }
 else
   echo "fleet-push: FLEET_PUSH_FORCE=1 — skipping cumulative gate"
 fi
-if git -C "$REPO" push "${DROVER_REMOTE}" ${DROVER_MAIN_BRANCH}; then
+if git -C "$REPO" push "${DROVER_REMOTE}" "${DROVER_MAIN_BRANCH}"; then
   printf '%s\tPUSHED\t%s\n' "$(date -u +%FT%TZ)" "$ahead" >> "$LEDGER" 2>/dev/null
   echo "fleet-push: pushed $ahead commit(s)"
 else
