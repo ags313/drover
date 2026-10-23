@@ -82,6 +82,21 @@ MAIN worktree add -q --detach "$wt" ${DROVER_MAIN_BRANCH} || { flag "worktree ad
 WT(){ git -C "$wt" "$@"; }
 base=$(WT rev-parse HEAD)
 cleanup(){ WT cherry-pick --abort 2>/dev/null; MAIN worktree remove --force "$wt" 2>/dev/null; rm -rf "$wt"; }
+# Keep human attribution and all other message text; strip tool attribution on every land path.
+strip_tool_trailers(){
+  local msg rc=0
+  msg=$(mktemp "$STATE/land-message.XXXXXX") || return 1
+  if WT log -1 --format=format:%B > "$msg"; then
+    if grep -qiE '^(Co-authored-by|Generated-by|Signed-off-by):.*(cursor|claude|codex|copilot|openai|anthropic|chatgpt|agy|opencode)' "$msg"; then
+      sed -i -E '/^(Co-authored-by|Generated-by|Signed-off-by):.*(cursor|claude|codex|copilot|openai|anthropic|chatgpt|agy|opencode)/Id' "$msg" \
+        && WT commit -q --amend --no-verify --cleanup=verbatim -F "$msg" || rc=1
+    fi
+  else
+    rc=1
+  fi
+  rm -f "$msg"
+  return "$rc"
+}
 # resolve unmerged paths with the branch's side when every one is a bean file; 1 when any code file conflicts
 take_bean_theirs(){
   local f nonbean=0
@@ -108,6 +123,7 @@ squash_land(){  # $1 = the commit whose cherry-pick conflicted
 $(MAIN log --reverse --no-merges --format='- %h %s' "${DROVER_MAIN_BRANCH}..$br")" \
     || { cleanup; flag "squash of $br could not be committed — manual land"; return 1; }
   how="squash of $n_picks commit"
+  strip_tool_trailers || { cleanup; flag "could not strip tool trailers from squash"; return 1; }
 }
 how="$n_picks commit"
 
@@ -126,6 +142,7 @@ for c in $picks; do   # SHAs are single tokens — word-splitting is safe here
       break
     fi
   fi
+  strip_tool_trailers || { cleanup; flag "could not strip tool trailers from cherry-pick $c"; exit 1; }
 done
 tip=$(WT rev-parse HEAD)
 if [ "$tip" = "$base" ]; then   # every commit was already on main: nothing to land, nothing to flag
