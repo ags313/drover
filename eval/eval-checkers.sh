@@ -527,6 +527,8 @@ out=$(hf env FLEET='x-qwen-coder:opencode' DROVER_MANUAL_SEATS=x-qwen-coder FLEE
   "$BIN"/fleet status 2>&1)
 awk -v b="$rq" '$1=="x-qwen-coder" && $3=="idle" && $6=="manual:" && $7=="waiting" && $8==b {f=1} END{exit !f}' <<<"$out" \
   && ok 'fleet status: the manual seat shows "manual: waiting <bean>" for its queued tagged bean' || bad "status waiting: $out"
+# Finish the plain bean before freeing its seat, so it is no longer ready for another top-up.
+( cd "$T/rb" && beans update "$ra" -s completed >/dev/null && git add -A && git commit -qm 'done plain bean' )
 rm -f "$T/rtasks/x-claude-coder"; rpass
 [ "$(wc -l < "$T/rdispatches")" = 1 ] && compgen -G "$T/rq/*-$rq" >/dev/null && grep -q 'queue empty but for seat-routed beans — nothing for x-claude-coder' "$T/rw/watch.log" \
   && ok 'seat routing: a second free automatic seat pass still leaves the tagged bean queued' \
@@ -552,6 +554,27 @@ renv "$T/rbin/fleet-watch" enqueue "$rq2" >/dev/null; rpass
 [ ! -s "$T/rdispatches" ] && [ "$(rroute "$rq2")" = x-qwen-coder ] && grep -q "REROUTE $rq2 — queued for 'any seat', now 'x-qwen-coder'" "$T/rw/watch.log" \
   && ok 'seat routing: top-up re-routes an unrouted entry for a tagged bean to its seat' \
   || bad "re-route hand-queued: dispatches='$(tr '\n' '|' < "$T/rdispatches")' route='$(rroute "$rq2")' $(rlog)"
+# A routed bean waiting for its busy manual seat never gates plain top-up. A queued plain bean still does.
+( cd "$T/rb" && beans create 'plain while routed waits' -t task -s todo >/dev/null && git add -A && git commit -qm plain1 )
+rp1=$(rid 'plain while routed waits'); renv "$T/rbin/fleet-watch" top-up >/dev/null 2>>"$T/r.err"
+compgen -G "$T/rq/*-$rp1" >/dev/null && [ "$(rroute "$rq2")" = x-qwen-coder ] \
+  && ok 'seat routing: a routed-only queue admits a ready plain bean while the manual seat is busy' \
+  || bad "plain top-up: queue='$(ls "$T/rq")' $(rlog)"
+( cd "$T/rb" && beans create 'plain on next tick' -t task -s todo >/dev/null && git add -A && git commit -qm plain2 )
+rp2=$(rid 'plain on next tick'); renv "$T/rbin/fleet-watch" top-up >/dev/null 2>>"$T/r.err"
+! compgen -G "$T/rq/*-$rp2" >/dev/null && compgen -G "$T/rq/*-$rp1" >/dev/null \
+  && ok 'seat routing: an existing plain queue entry still gates further plain top-up' \
+  || bad "plain queue gate: queue='$(ls "$T/rq")' $(rlog)"
+rpass
+[ "$(cat "$T/rdispatches")" = "$rp1 x-claude-coder" ] && [ "$(rroute "$rq2")" = x-qwen-coder ] \
+  && ok 'seat routing: the idle automatic coder dispatches the plain bean while the routed bean waits' \
+  || bad "plain dispatch: dispatches='$(cat "$T/rdispatches")' $(rlog)"
+rdone "$rp1"; rm -f "$T/rtasks/x-claude-coder"; rpass
+[ "$(sed -n 2p "$T/rdispatches")" = "$rp2 x-claude-coder" ] && [ "$(wc -l < "$T/rdispatches")" = 2 ] \
+  && [ "$(rroute "$rq2")" = x-qwen-coder ] && [ -f "$T/rtasks/x-qwen-coder" ] \
+  && ok 'seat routing: the next tick tops up and dispatches another plain bean while the manual seat stays busy' \
+  || bad "next tick plain dispatch: dispatches='$(cat "$T/rdispatches")' $(rlog)"
+rdone "$rp2"; rm -f "$T/rtasks/x-claude-coder"; : > "$T/rdispatches"
 # retag while the old seat stays busy: top-up queued the bean for x-qwen-coder; it moves to the newly named idle seat
 rdone "$rq2"; rm -f "$T/rq/"*
 ( cd "$T/rb" && beans create 'retag me' -t task -s todo --tag seat:x-qwen-coder >/dev/null && git add -A && git commit -qm bean5 )

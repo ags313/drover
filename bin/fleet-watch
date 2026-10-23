@@ -582,10 +582,14 @@ top_up_queue(){
   # then merge into main and close". While state/finish-first exists no NEW bean enters the queue or a seat;
   # fix rounds (followups) and reviews on existing work still flow.
   [ -f "$STATE/finish-first" ] && return 0
-  # A non-empty queue gets only seat-routed beans (tag seat:<name>): one waits for its own seat, not for the queue
-  # to drain. Without the tag a bean enters only an empty queue, as before. Every pass also re-routes the entries
+  # A queue with plain entries gets only seat-routed beans (tag seat:<name>): one waits for its own seat, not for the queue
+  # to drain. Without the tag a bean enters only when no plain entry is queued. Every pass also re-routes the entries
   # already queued to the bean's current tag: a retag must not wait for the old seat to come free.
-  local only_routed=0; [ "$(ls "$Q" 2>/dev/null | wc -l | tr -d ' ')" = 0 ] || only_routed=1
+  local only_routed=0 qentry
+  for qentry in "$Q"/*; do
+    [ -f "$qentry" ] || continue
+    [ -s "$qentry" ] || { only_routed=1; break; }   # a routing note makes this entry seat-specific
+  done
   # Fleet base invariant: $DROVER_REPO must be on main. `beans list --ready` reads the WORKING TREE,
   # but the dispatch guard reads `main:`. A drifted base enqueues beans already completed on main;
   # refill skips them all and every coder idles behind a misleading "queue empty". Fail closed.
