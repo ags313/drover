@@ -21,7 +21,6 @@ mkdir -p "$DROVER_HOME"
 [ -f "$DB" ] || printf 'task_id\tagent\trole\tharness\tbean\tassigned_at\tfinished_at\treport\tverdict\trounds\tlanded\n' > "$DB"
 
 sync_tasks() {
-  local added=0
   # every dispatch in the event log is a task; the report file is its completion proof
   awk -F'\t' '$2=="assign"||$2=="review" {print $1"\t"$3"\t"$4"\t"$5"\t"$6}' "$EV" 2>/dev/null | while IFS=$'\t' read -r ts agent harness role bean; do
     [ -n "$agent" ] || continue
@@ -51,7 +50,7 @@ case "${1:-board}" in
 sync)  sync_tasks ;;
 board)
   printf '%-20s %-10s %-12s %-9s %s\n' AGENT ROLE BEAN VERDICT AGE
-  awk -F'\t' 'NR>1 && $7=="-" {print}' "$DB" | while IFS=$'\t' read -r id agent role harness bean at fin rep v r landed; do
+  awk -F'\t' 'NR>1 && $7=="-" {print}' "$DB" | while IFS=$'\t' read -r id agent role harness bean at fin rep v _ landed; do
     printf '%-20s %-10s %-12s %-9s %s\n' "$agent" "$role" "$bean" "${v:--}" "$at"; done | tail -20 ;;
 stats)
   # UNVALIDATED — do not use for routing. Checked 2026-09-04 against ground truth

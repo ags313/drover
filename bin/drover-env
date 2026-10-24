@@ -37,6 +37,7 @@ DROVER_CONFIG="${DROVER_CONFIG:-$HOME/.config/drover/config}"
 # drover checkout they came from (for skills/ and docs/). Scripts call each other through
 # $DROVER_BIN, never through PATH: a service manager's PATH is short, and `fleet` is also the name of an IDE CLI.
 _drover_self="${BASH_SOURCE[0]}"
+# shellcheck disable=SC2034  # read by the scripts that source this file
 DROVER_BIN="$(cd "$(dirname "$_drover_self")" && pwd)"
 while [ -L "$_drover_self" ]; do
   _drover_t=$(readlink "$_drover_self")
@@ -72,6 +73,7 @@ drover_manual_seat(){ case " ${DROVER_MANUAL_SEATS:-} " in *" $1 "*) return 0 ;;
 # whose integration branch is not `main`, or whose `origin` is not where it deploys, sets them in its config.
 DROVER_MAIN_BRANCH="${DROVER_MAIN_BRANCH:-main}"
 DROVER_REMOTE="${DROVER_REMOTE:-origin}"
+# shellcheck disable=SC2034  # read by the scripts that source this file
 DROVER_UPSTREAM="$DROVER_REMOTE/$DROVER_MAIN_BRANCH"
 # Scripts match paths from git's output by name (git ls-files .beans | grep "^.beans/$bean--"). git's default
 # core.quotepath=true prints a byte above 0x80 as an octal escape inside quotes, so a bean file named
@@ -100,8 +102,11 @@ DROVER_PUSH_MAX_WAIT_MIN="${DROVER_PUSH_MAX_WAIT_MIN:-0}"
 # Reasons fleet-land-bean writes to state/needs-land/<bean> that are a coder's to fix. fleet-watch routes a
 # flagged bean by matching these, so writer and matchers read one definition: the router once matched
 # "content conflict in" while the writer said "content conflict on", and conflicted beans sat flagged forever.
+# shellcheck disable=SC2034  # read by the scripts that source this file
 DROVER_LAND_CONFLICT="content conflict"
+# shellcheck disable=SC2034  # read by the scripts that source this file
 DROVER_LAND_TESTS="related tests failed"
+# shellcheck disable=SC2034  # read by the scripts that source this file
 DROVER_LAND_STALE="stale branch"
 
 # Where herdr puts each seat's worktree, and the beans id prefix (read from the repo's .beans.yml).

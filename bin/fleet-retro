@@ -37,7 +37,7 @@ RULES="${DROVER_RULES:-$HOME/.config/drover/PEERS.md}"
   echo "One line per finding. Classify each by CLASS, not by incident — the value"
   echo "is in spotting that many share a shape."
   echo '```'
-  find "$REPORTS" -name '*review*.md' -newermt "$SINCE" 2>/dev/null -print0 \
+  find "$REPORTS" -name '*review*.md' -newermt "$SINCE" -print0 2>/dev/null \
     | xargs -0 grep -hoE "^#+ *(HIGH|MEDIUM|LOW|CRITICAL)-?[0-9]* — .{0,100}" 2>/dev/null \
     | sed 's/^#* *//' | sort -u
   echo '```'

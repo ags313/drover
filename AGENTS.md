@@ -5,7 +5,7 @@
 - Read a change with `git diff nixos-multiproject...HEAD`.
 
 ## Check
-- Run from the repo root: `nix-shell --run 'bash eval/eval-checkers.sh'`. `nix-shell` reads `shell.nix` there.
+- Run from the repo root: `nix-shell --run 'bash eval/eval-checkers.sh'` and `nix-shell --run 'bash eval/lint.sh'`. `nix-shell` reads `shell.nix` there.
 - `bob check` runs the same command.
 - Reviewers cannot run the checks. bob runs them and repeats them at the land.
 - If nix-shell cannot write `~/.cache/nix` in a sandbox, run it with `XDG_CACHE_HOME="$(mktemp -d)"`.
@@ -27,7 +27,7 @@
 ## Bean rules
 - An acceptance item that needs another repo or live state names the exact command and its env.
   Or it says "operator verifies".
-- An acceptance item names the command to run and the result to expect. Not "shellcheck clean".
+- An acceptance item names the command to run and the result to expect. Not "shellcheck clean" (`eval/lint.sh` covers it).
 
 ## Live state and other repos
 - Other checkouts are readable from the agent shell.

@@ -5,7 +5,7 @@
 cd "$DROVER_REPO" || exit 1
 mkdir -p node_modules/pkg; echo 'module.exports = 1' > node_modules/pkg/index.js
 real_nm='test -d node_modules && test ! -L node_modules && test -f node_modules/pkg/index.js'
-out=$(DROVER_BUILD="$real_nm" DROVER_TEST_ALL= "$BIN"/fleet-verify-main 2>&1)
+out=$(DROVER_BUILD="$real_nm" DROVER_TEST_ALL='' "$BIN"/fleet-verify-main 2>&1)
 grep -q '^verify: GREEN' <<<"$out" && ok 'verify-main gate worktree holds a real node_modules' || bad "verify-main: $(tail -3 <<<"$out" | tr '\n' ' ')"
 git checkout -qb fleet/c1-bean-nm; echo nm > src/nm.txt; git add src/nm.txt; git commit -qm 'feat: nm (bean-nm)'; git checkout -q main
 out=$(DROVER_TYPECHECK="$real_nm" "$BIN"/fleet-land-bean bean-nm 2>&1)

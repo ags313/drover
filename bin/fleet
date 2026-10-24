@@ -759,7 +759,7 @@ cmd_assign() {
   # returns before the agent has taken the message and the turn is silently
   # dropped; measured 2026-09-07, six of six parallel dispatches lost.
   # Dispatch SERIALLY for the same reason — parallel `&` loses prompts.
-  herdr agent prompt "$coder" "New bean: read $bf and follow it exactly. It assigns you $bean. Merge ${DROVER_MAIN_BRANCH} first: git merge ${DROVER_MAIN_BRANCH} --no-edit" --wait --until working --until done --until blocked --timeout 100000 | jq -r --arg b "$bean" '"\(.result.agent.name) <- \($b): \(.result.agent.agent_status)"'
+  herdr agent prompt "$coder" "New bean: read $bf and follow it exactly. It assigns you $bean. Merge ${DROVER_MAIN_BRANCH} first: git merge ${DROVER_MAIN_BRANCH} --no-edit" --wait --until working --until 'done' --until blocked --timeout 100000 | jq -r --arg b "$bean" '"\(.result.agent.name) <- \($b): \(.result.agent.agent_status)"'
   # The lead's manual `fleet assign` wrote ONLY the ledger, while the watcher's
   # auto-dispatch writes the ledger AND the task file. fleet-track and the
   # reaper both read the TASK FILE, so a hand-assigned seat looked stale to
@@ -853,11 +853,12 @@ cmd_land() {  # <coder> — merge fleet/<coder> into main even though main's ind
   tmp=$(mktemp)
   git -C "$FLEET_ROOT" diff --cached --name-only > "$tmp.paths"
   while read -r f; do git -C "$FLEET_ROOT" ls-files -s -- "$f"; done < "$tmp.paths" > "$tmp"   # mode sha stage path
+  # shellcheck disable=SC2046  # one path per line, split into arguments on purpose
   [ -s "$tmp.paths" ] && git -C "$FLEET_ROOT" reset -q -- $(cat "$tmp.paths")
   if git -C "$FLEET_ROOT" merge --no-ff -q "$br" -m "merge: $br — $(git -C "$FLEET_ROOT" log -1 --format=%s "$br" | cut -c1-70)
 
 Reviewed cross-harness by the fleet; lead-verified." 2>"$tmp.err"; then echo "merged: $(git -C "$FLEET_ROOT" log -1 --format=%h)"; else echo "MERGE FAILED:"; head -5 "$tmp.err"; git -C "$FLEET_ROOT" merge --abort 2>/dev/null; fi
-  while read -r mode sha stage path; do git -C "$FLEET_ROOT" update-index --add --cacheinfo "$mode,$sha,$path"; done < "$tmp"   # exact staged blobs back
+  while read -r mode sha _ path; do git -C "$FLEET_ROOT" update-index --add --cacheinfo "$mode,$sha,$path"; done < "$tmp"   # exact staged blobs back
   echo "staged entries restored: $(git -C "$FLEET_ROOT" diff --cached --name-only | wc -l | tr -d ' ')"; rm -f "$tmp" "$tmp.paths" "$tmp.err"
 }
 
@@ -1105,7 +1106,7 @@ case "${1:-}" in
     check_beans "${3:-}"
     r=$(role_of "$2"); ev=assign; [ "$r" = reviewer ] && ev=review
     log "$ev" "$2" "$kind" "$r" "$(last_bean "$2")" "followup: ${3:0:80}"
-    herdr agent prompt "$2" "$3" --wait --until working --until done --until blocked | jq -r '"\(.result.agent.name): \(.result.agent.agent_status)"'
+    herdr agent prompt "$2" "$3" --wait --until working --until 'done' --until blocked | jq -r '"\(.result.agent.name): \(.result.agent.agent_status)"'
     ;;
   usage)   cmd_usage ;;
   rules)   cmd_rules ;;
@@ -1120,7 +1121,7 @@ case "${1:-}" in
     check_beans "${3:-}"
     bean=$(drover_bean_ids "${3:-}" "$FLEET $DROVER_LEAD_SEATS" | head -1 || true)
     log assign "$2" "$kind" "$(role_of "$2")" "${bean:--}" "send: ${3:0:60}"
-    herdr agent prompt "$2" "$3" --wait --until working --until done --until blocked | jq -r '"\(.result.agent.name): \(.result.agent.agent_status)"'
+    herdr agent prompt "$2" "$3" --wait --until working --until 'done' --until blocked | jq -r '"\(.result.agent.name): \(.result.agent.agent_status)"'
     ;;
   read)    herdr agent read "$2" --source visible --lines "${3:-60}" ;;
   wait)    if [ -n "${3:-}" ]; then herdr agent wait "$2" --until "$3"; else herdr agent wait "$2"; fi ;;

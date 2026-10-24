@@ -59,7 +59,7 @@ esac
 STUB
 chmod +x "$T/sbin/fleet" "$T/sbin/herdr"
 printf '1\tbean-silent\n' > "$T/silent/tasks/test-coder"
-echo done > "$T/silent/status"
+echo 'done' > "$T/silent/status"
 spass(){ PATH="$T/sbin:$PATH" SILENT_ROOT="$T/silent" FLEET_TASKS="$T/silent/tasks" FLEET_STATE="$T/silent/state" FLEET_INBOX="$T/silent/inbox" "$T/sbin/fleet-watch" silent >/dev/null; }
 sdir="$T/silent/state/silent/bean-silent"
 spass
@@ -70,7 +70,7 @@ spass; spass
   && [ "$(grep -c 'NUDGE test-coder bean-silent$' "$T/silent/watch.log")" = 1 ] \
   && ok 'silent: five minutes idle with tracked changes sends exactly one nudge' || bad 'silent: missing or repeated prompt'
 echo working > "$T/silent/status"; spass
-echo done > "$T/silent/status"; spass
+echo 'done' > "$T/silent/status"; spass
 echo $(( $(date +%s)-300 )) > "$sdir/idle"
 echo $(( $(date +%s)-300 )) > "$sdir/nudged"
 spass; spass
@@ -98,7 +98,7 @@ spass
 [ "$(wc -l < "$T/silent/prompts")" = 2 ] && ok 'silent: untracked-only tree at base is not nudged' || bad 'silent: nudged a clean tracked tree'
 echo dirty >> "$T/silent-wt/src/a.txt"
 echo working > "$T/silent/status"; spass
-echo done > "$T/silent/status"; spass
+echo 'done' > "$T/silent/status"; spass
 [ "$(wc -l < "$T/silent/prompts")" = 2 ] && ok 'silent: working resets the continuous idle window' || bad 'silent: task age mistaken for idle age'
 
 # An announcement belongs to a dispatch, not all future rounds of the bean.

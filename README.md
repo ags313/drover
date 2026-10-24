@@ -253,7 +253,7 @@ ran with, minus `/nix/store` entries. They stop at logout unless you `loginctl e
 With Nix: `nix-shell` gives every binary drover runs, listed in `shell.nix`: the tools above, herdr, beans and
 the default roster's harness CLIs (claude-code, codex, opencode; unfree allowed for that shell only). The units
 and herdr's panes run outside that shell, so on NixOS install the same list in your profile; `install.sh` names
-any the units' PATH lacks. Check a change with `nix-shell --run 'bash eval/eval-checkers.sh'`. `AGENTS.md` has the base branch, the check and the rules for agents.
+any the units' PATH lacks. Check a change with `nix-shell --run 'bash eval/eval-checkers.sh'` and lint it with `nix-shell --run 'bash eval/lint.sh'`. `AGENTS.md` has the base branch, the check and the rules for agents.
 
 `fleet rules` writes one plugin per harness under `~/.config/drover/skills/<harness>/` (`plugin.json` plus
 `skills/`); a harness loads it only when launched against that directory. Cursor: `cursor-agent --plugin-dir

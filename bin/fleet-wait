@@ -14,7 +14,7 @@ while [ "$waited" -lt "$budget" ]; do
     printf '%-18s %-11s %-8s %s\n' AGENT BEAN STATE SUMMARY
     printf -- '--------------------------------------------------------------\n'
     echo "$msgs" | while read -r m; do
-      IFS=$'\t' read -r ts a bean state summary report < "$m"
+      IFS=$'\t' read -r _ a bean state summary report < "$m"
       printf '%-18s %-11s %-8s %s\n' "$a" "$bean" "$state" "${summary:0:60}"
       [ -n "$report" ] && echo "                                        -> $report"
       rm -f "$m"

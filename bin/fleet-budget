@@ -198,7 +198,7 @@ while read -r a kind st; do
  fi
  if [ "$kind" = opencode ];then case "$verdict" in UNKNOWN)oc_unknown=$((oc_unknown+1));;MODEL_CAP)oc_cap=$((oc_cap+1));;WORKSPACE_BALANCE)oc_broke=$((oc_broke+1));;esac;fi
  printf 'SEAT %s %s %s %s\n' "$a" "$kind" "$st" "$verdict"
- if [ "$st" = done ] || [ "$st" = idle ];then silent="$silent $a";fi
+ if [ "$st" = 'done' ] || [ "$st" = idle ];then silent="$silent $a";fi
 done <<< "$ROWS"
 printf 'harness    agents  state\n--------------------------------\n'
 if [ "$status_valid" -eq 0 ];then printf 'opencode   %-6s UNKNOWN (status read failed, invalid, or empty)\n' "$oc_agents";fi

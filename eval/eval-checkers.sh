@@ -49,6 +49,7 @@
 # Cases live in eval/cases/NNN-<area>.sh, sourced in name order. A new case goes at the end of its area's file, or in a new file with a free NNN; describe it at the top of that file, not in this list.
 # No network, no keys. Exit 1 on the first wrong answer.
 set -uo pipefail
+# shellcheck disable=SC2034  # used by the case files sourced below
 BIN="$(cd "$(dirname "$0")/../bin" && pwd)"
 CASES="$(cd "$(dirname "$0")/cases" && pwd)"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -67,6 +68,7 @@ bad(){ echo "FAIL  $*"; fail=1; }
 shopt -s nullglob
 cases=("$CASES"/[0-9][0-9][0-9]-*.sh)
 [ "${#cases[@]}" -gt 0 ] || { echo "FAIL  no case files in $CASES"; exit 1; }
+# shellcheck disable=SC1090  # the case files; lint.sh checks each one on its own
 for c in "${cases[@]}"; do . "$c"; done
 
 [ "$fail" = 0 ] && echo 'all checker cases pass' || { echo 'checker cases FAILED'; exit 1; }

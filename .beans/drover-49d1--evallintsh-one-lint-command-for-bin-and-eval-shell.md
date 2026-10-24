@@ -1,13 +1,13 @@
 ---
 # drover-49d1
 title: 'eval/lint.sh: one lint command for bin/ and eval/ (shellcheck, python syntax), clean on the current tree'
-status: todo
+status: completed
 type: task
 priority: low
 tags:
     - session-analysis
 created_at: 2026-10-24T22:07:27Z
-updated_at: 2026-10-24T22:07:27Z
+updated_at: 2026-10-24T23:51:45Z
 blocked_by:
     - drover-qtur
     - drover-9z4q
@@ -43,9 +43,32 @@ Chosen: a separate script that bob runs as `build`, not a call inside eval-check
 
 ## Acceptance
 
-- [ ] `nix-shell --run 'bash eval/lint.sh'` exits 0 on the branch and its last line is `lint clean: 60 shell, 10 python` (31 bash + drover-env in bin, 4 eval scripts with lint.sh, 24 files in eval/cases; a file added since changes the count)
-- [ ] a temporary `cd /tmp` with no `|| exit` in a bin bash script (SC2164, warning level) makes it exit 1 and name the file; a temporary syntax error in a python script does the same (local checks, do not commit)
-- [ ] it works from another directory: in `nix-shell`, `cd / && bash <repo>/eval/lint.sh` gives the same result
-- [ ] it writes no file under `bin/` or `eval/` (`find bin eval -newer <stamp-file>` is empty after a run)
-- [ ] `nix-shell --run 'bash eval/eval-checkers.sh'` passes, and its result lines (`grep -E '^(ok|FAIL) ' | sed -E 's/\([0-9]+ms\)/(Nms)/'`) before the first edit and after the change give an empty `diff`
-- [ ] AGENTS.md names `nix-shell --run 'bash eval/lint.sh'`, and README.md:256 names it next to the eval command
+- [x] `nix-shell --run 'bash eval/lint.sh'` exits 0 on the branch and its last line is `lint clean: 60 shell, 10 python` (31 bash + drover-env in bin, 4 eval scripts with lint.sh, 24 files in eval/cases; a file added since changes the count)
+- [x] a temporary `cd /tmp` with no `|| exit` in a bin bash script (SC2164, warning level) makes it exit 1 and name the file; a temporary syntax error in a python script does the same (local checks, do not commit)
+- [x] it works from another directory: in `nix-shell`, `cd / && bash <repo>/eval/lint.sh` gives the same result
+- [x] it writes no file under `bin/` or `eval/` (`find bin eval -newer <stamp-file>` is empty after a run)
+- [x] `nix-shell --run 'bash eval/eval-checkers.sh'` passes, and its result lines (`grep -E '^(ok|FAIL) ' | sed -E 's/\([0-9]+ms\)/(Nms)/'`) before the first edit and after the change give an empty `diff`
+- [x] AGENTS.md names `nix-shell --run 'bash eval/lint.sh'`, and README.md:256 names it next to the eval command
+
+## Summary of Changes
+
+drover-49d1 done in 543d4f7. Rebase onto nixos-multiproject was a no-op: the branch was already up to date.
+
+- Added eval/lint.sh (bash, set -uo pipefail). It cds to the repo root and exits 1 with "lint: shellcheck not found, run it inside nix-shell" if shellcheck is missing. It sorts `git ls-files bin eval` by first line: bash shebang, bin/drover-env or eval/cases/*.sh → shell; python3 shebang → python; anything else is skipped. It runs `shellcheck -x -P bin -S warning --shell=bash` on the shell files and ast.parse on the python files, so nothing is written to the tree. Output: "lint clean: 60 shell, 10 python".
+- Fixed the tree without changing behaviour:
+  - quoted 'done' (SC1010) in fleet, fleet-budget, fleet-hunt and 230-clear-dialogs
+  - `_` for unused read fields in fleet, fleet-tasks and fleet-wait; removed the unused `local added` in fleet-tasks
+  - fleet-retro: 2>/dev/null moved after -print0 (SC2227)
+  - 140-gate-worktrees: DROVER_TEST_ALL='' (SC1007)
+  - 100-top-up: top_up moved onto its own line so the disable directive covers the test
+  - disable comments with a reason where a fix would change behaviour: drover-env vars read by the scripts that source it (SC2034), the $(cat paths) split in fleet land (SC2046), ls|grep counts in fleet-scoreboard and the 100 case (SC2010), rl_reason in the 190 case (SC2154), BIN and the `.` loop in eval-checkers (SC2034, SC1090)
+- README.md:256 and AGENTS.md updated as the bean asks.
+
+Acceptance checks, all run locally:
+- lint.sh exits 0 with that last line, from the repo and from /.
+- A `cd /tmp` added to bin/fleet-retro exits 1 with SC2164 naming the file. In bin/fleet-wait it is not flagged, because shellcheck skips SC2164 under set -e.
+- A python syntax error added to bin/fleet-slot exits 1 and names the file.
+- `find bin eval -newer stamp` is empty after a run.
+- eval-checkers result lines: diff before/after is empty (155 ok).
+
+Note: these local runs did not go through nix-shell. My sandbox blocks github.com, so the pinned nixpkgs could not be fetched, and it also blocks the nix daemon socket. I ran on the host with shellcheck 0.11.0 from /nix/store on PATH. `bob check` (which does use nix-shell) passed on 543d4f7. Nobody has yet run `nix-shell --run 'bash eval/lint.sh'` with the pinned shellcheck. If that version differs from 0.11.0, the result could differ.

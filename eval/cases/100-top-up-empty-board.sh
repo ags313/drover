@@ -10,4 +10,6 @@ top_up; rc=$?
 [ "$rc" = 0 ] && [ ! -s "$T/q.err" ] && [ -z "$(ls "$T/q" 2>/dev/null)" ] \
   && ok 'top-up on an empty board: no stderr, nothing queued' || bad "top-up on an empty board (rc=$rc): $(head -c 300 "$T/q.err")"
 ( cd "$T/eb" && beans create 'one ready bean' -t task -s todo >/dev/null && git add -A && git commit -qm bean )
-top_up; [ "$(ls "$T/q" 2>/dev/null | grep -c .)" = 1 ] && ok 'top-up queues a ready bean' || bad "top-up queued: $(ls "$T/q" 2>/dev/null | tr '\n' ' ') err: $(head -c 300 "$T/q.err")"
+top_up
+# shellcheck disable=SC2010  # counts queued entries; the names are bean ids
+[ "$(ls "$T/q" 2>/dev/null | grep -c .)" = 1 ] && ok 'top-up queues a ready bean' || bad "top-up queued: $(ls "$T/q" 2>/dev/null | tr '\n' ' ') err: $(head -c 300 "$T/q.err")"

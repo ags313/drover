@@ -40,7 +40,7 @@ for a in $("$DROVER_BIN"/fleet status 2>/dev/null | awk 'NR>1 && $1!="-" && ($3=
     msg="No bean assigned — go bug hunting. Read $BRIEFS/bug-hunt.txt and follow it. Report to $REPORTS/$a-bughunt-$DATE.md. PROVE every finding with file:line, the trigger and the wrong output; an honest empty hunt beats a manufactured finding."
   fi
   # Serial, and --wait: a parallel dispatch silently drops the prompt.
-  herdr agent prompt "$a" "$msg" --wait --until working --until done --timeout 100000 >/dev/null 2>&1
+  herdr agent prompt "$a" "$msg" --wait --until working --until 'done' --timeout 100000 >/dev/null 2>&1
   sent=$((sent+1))
 done
 echo "sent $sent idle non-coder agents hunting ($MODE)"

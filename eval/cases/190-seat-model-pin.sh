@@ -179,6 +179,7 @@ out=$(cd "$DROVER_REPO" && hf env FLEET_ROOT="$DROVER_REPO" FLEET='qwen-coder:op
 [ "$rc" = 0 ] && grep -q '^agent prompt qwen-coder New bean: .* x-ab12' "$T/herdr.log" && [ -f "$T/home/briefs/assign-qwen-coder-x-ab12.txt" ] \
   && ok 'fleet assign <bean> <manual seat> dispatches to it' || bad "assign to a manual seat (rc=$rc): $out herdr: $(grep 'agent prompt' "$T/herdr.log" | head -c 200)"
 # land routing: an ownerless conflicted bean is never handed to a manual seat (the only live coder here)
+# shellcheck disable=SC2154  # rl_reason is set in 070-route-land-conflicts.sh
 printf '%s\n' "$rl_reason" > "$FLEET_STATE/needs-land/bean-mn"
 python3 -c 'import os, sys, time; t = time.time() - 300; os.utime(sys.argv[1], (t, t))' "$FLEET_STATE/needs-land/bean-mn"
 DROVER_MANUAL_SEATS=claude-coder FLEET_BRIEFS="$T/home/briefs" "$T/wbin/fleet-watch" route-land >/dev/null 2>&1
