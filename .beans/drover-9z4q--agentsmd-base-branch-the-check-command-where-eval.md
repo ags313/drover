@@ -1,13 +1,13 @@
 ---
 # drover-9z4q
 title: 'AGENTS.md: base branch, the check command, where eval cases go, and the bean rules'
-status: todo
+status: completed
 type: task
 priority: low
 tags:
     - session-analysis
 created_at: 2026-10-24T22:07:26Z
-updated_at: 2026-10-24T22:07:26Z
+updated_at: 2026-10-24T22:48:39Z
 ---
 
 Session analysis 2026-10-24 (window 2026-10-23 12:22Z – 2026-10-24 19:35Z).
@@ -39,8 +39,12 @@ Requirement: add `AGENTS.md` at the repo root, at most 60 lines, short plain sen
 
 ## Acceptance
 
-- [ ] AGENTS.md exists at the repo root and has at most 60 lines
-- [ ] every check command in it runs as written from the repo root in `nix-shell`, and the eval command passes
-- [ ] it names `nixos-multiproject` as the base and lists the same python scripts as `for f in $(git ls-files bin); do head -1 "$f" | grep -q python && echo "$f"; done`
-- [ ] it has the bean rules and the live-state rule above
-- [ ] no other file changes, except the README.md pointer
+- [x] AGENTS.md exists at the repo root and has at most 60 lines
+- [x] every check command in it runs as written from the repo root in `nix-shell`, and the eval command passes
+- [x] it names `nixos-multiproject` as the base and lists the same python scripts as `for f in $(git ls-files bin); do head -1 "$f" | grep -q python && echo "$f"; done`
+- [x] it has the bean rules and the live-state rule above
+- [x] no other file changes, except the README.md pointer
+
+## Summary of Changes
+
+Added AGENTS.md (37 lines) at the repo root. It covers the base branch nixos-multiproject, the nix-shell check and the XDG_CACHE_HOME workaround, the note at the top of eval/eval-checkers.sh for new cases, the hermetic git setup, the 10 python bin scripts (matched against the head -1 python loop), the bean rules and the live-state rule. README.md got one sentence pointing to AGENTS.md. All acceptance items are checked in the bean file. The MCP bob check passed on the last commit. The CLI `bob check` refused inside the sandbox because of untracked /dev/null placeholder files in the worktree (.bashrc, .gitconfig and similar). Those files are not mine and I did not touch them. The README sentence says AGENTS.md "has the base branch, the check and the rules for agents". The "note at the top" of eval-checkers.sh is the existing case list header; there is no separate case-files note on this branch yet.
